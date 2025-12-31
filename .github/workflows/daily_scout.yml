@@ -1,1 +1,5 @@
-.
+- name: Save Database Changes
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: "Scout: Update 90-day history DB [skip ci]"
+        file_pattern: 'scout.db'
