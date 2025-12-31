@@ -1,67 +1,52 @@
-import requests
-from bs4 import BeautifulSoup
-import smtplib
-import os
-import csv
-from email.message import EmailMessage
+import sqlite3
+import pandas as pd
+from datetime import datetime, timedelta
 
-# 1. SETUP - Targets & Email
-TARGETS = ["Texas Ranger silver peso", "OHP obsolete oval patch", "WHCA challenge coin"]
-EMAIL_ADDRESS = os.environ.get('EMAIL_USER')
-EMAIL_PASSWORD = os.environ.get('EMAIL_PASS') # Use App Password
-HISTORY_FILE = "last_seen.csv"
+DB_NAME = "scout.db"
 
-def get_listings(query):
-    url = f"https://www.ebay.com/sch/i.html?_nkw={query.replace(' ', '+')}&_sop=10"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    resp = requests.get(url, headers=headers)
-    soup = BeautifulSoup(resp.text, 'html.parser')
-    items = []
-    for item in soup.select('.s-item__info')[1:6]:
-        title = item.select_one('.s-item__title').text
-        link = item.select_one('.s-item__link')['href']
-        price = item.select_one('.s-item__price').text
-        items.append({'title': title, 'link': link, 'price': price})
-    return items
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    # Unique URL prevents duplicate entries
+    c.execute('''CREATE TABLE IF NOT EXISTS items 
+                 (id INTEGER PRIMARY KEY, 
+                  found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+                  target TEXT, title TEXT, price TEXT, url TEXT UNIQUE)''')
+    conn.commit()
+    conn.close()
 
-def run_scout():
-    new_finds = []
-    # Load history
-    seen_links = set()
-    if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, 'r') as f:
-            seen_links = set(line.strip() for line in f)
+def scout_logic():
+    # ... (Your eBay scraping code here) ...
+    # After scraping new items:
+    save_to_db(new_items_list)
+    
+    # Check what day it is
+    today = datetime.now()
+    
+    # 1. ALWAYS send the Daily Alert for brand new finds
+    send_daily_alert(new_items_list)
+    
+    # 2. SUNDAY ROLL-UP: If it's Sunday (weekday 6), send the intelligence report
+    if today.weekday() == 6:
+        send_weekly_rollup()
 
-    for target in TARGETS:
-        listings = get_listings(target)
-        for l in listings:
-            if l['link'] not in seen_links:
-                new_finds.append(l)
-                seen_links.add(l['link'])
+def send_weekly_rollup():
+    conn = sqlite3.connect(DB_NAME)
+    # Pull everything from the last 7 days
+    query = "SELECT target, title, price, url FROM items WHERE found_date > datetime('now', '-7 days')"
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if not df.empty:
+        # Convert the table to a clean HTML table for the email
+        html_table = df.to_html(index=False, classes='mystyle')
+        email_body = f"<h2>🛡️ Weekly Intelligence Report</h2><p>Here are all opportunities found in the last 7 days:</p>{html_table}"
+        # ... (Send email code) ...
 
-    if new_finds:
-        # Save new history
-        with open(HISTORY_FILE, 'w') as f:
-            for link in seen_links:
-                f.write(link + '\n')
-        
-        # Build Email Content
-        msg_content = "Scout Alert: New Items Found!\n\n"
-        for item in new_finds:
-            msg_content += f"Item: {item['title']}\nPrice: {item['price']}\nLink: {item['link']}\n\n"
-        
-        send_email(msg_content)
-
-def send_email(content):
-    msg = EmailMessage()
-    msg.set_content(content)
-    msg['Subject'] = "🛡️ Scout: New Tier 1 Finds"
-    msg['From'] = EMAIL_ADDRESS
-    msg['To'] = EMAIL_ADDRESS
-
-    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-        smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-        smtp.send_message(msg)
-
-if __name__ == "__main__":
-    run_scout()
+def purge_old_data():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    # Keep only the last 90 days
+    c.execute("DELETE FROM items WHERE found_date < datetime('now', '-90 days')")
+    conn.commit()
+    conn.close()
