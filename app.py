@@ -99,30 +99,35 @@ with st.sidebar:
             if st.toggle(s, value=True, key=f"sb_site_{s}")
         ]
 
-   st.subheader("🎯 Keywords")
+      st.subheader("🎯 Keywords")
 
-with st.container(height=210, border=True):
-    # Quick add keyword (ad-hoc convenience)
-    with st.form("quick_add_kw", clear_on_submit=True):
-        c1, c2 = st.columns([4, 1])
-        new_kw = c1.text_input("Add keyword", label_visibility="collapsed")
-        add = c2.form_submit_button("＋")
-        if add and new_kw:
-            conn.execute(
-                "INSERT OR IGNORE INTO targets (name) VALUES (?)",
-                (new_kw.strip(),)
+    with st.container(height=210, border=True):
+        # Quick add keyword (ad-hoc convenience)
+        with st.form("quick_add_kw", clear_on_submit=True):
+            c1, c2 = st.columns([4, 1])
+            new_kw = c1.text_input(
+                "Add keyword",
+                label_visibility="collapsed"
             )
-            conn.commit()
-            log_event("KEYWORD", f"Added keyword '{new_kw}' from sidebar")
-            st.rerun()
+            add = c2.form_submit_button("＋")
 
-    st.divider()
+            if add and new_kw:
+                conn.execute(
+                    "INSERT OR IGNORE INTO targets (name) VALUES (?)",
+                    (new_kw.strip(),)
+                )
+                conn.commit()
+                log_event("KEYWORD", f"Added keyword '{new_kw}' from sidebar")
+                st.rerun()
 
-    keywords = db_list_keywords(conn)
-    active_keywords = [
-        k for k in keywords
-        if st.checkbox(k, value=True, key=f"sb_kw_{k}")
-    ]
+        st.divider()
+
+        keywords = db_list_keywords(conn)
+        active_keywords = [
+            k for k in keywords
+            if st.checkbox(k, value=True, key=f"sb_kw_{k}")
+        ]
+
 
 
     st.divider()
