@@ -15,18 +15,6 @@
 # - UI is intentionally explicit about active vs planned engines
 # ============================================================
 
-
-This version:
-- Makes engine state **explicit**
-- Prevents accidental assumptions
-- Keeps backend exactly as-is
-
-```python
-# SCOUT TERMINAL VERSION: 3.62
-# UI: Explicit engine visibility
-# Engine: Google (SerpAPI) enabled
-# Others: Visible but disabled (Planned)
-
 import streamlit as st
 import pandas as pd
 import sqlite3
