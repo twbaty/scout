@@ -1,14 +1,13 @@
-# SCOUT TERMINAL VERSION: 3.50
-# FIXES:
-# - Restore log purge
-# - Add DEBUG mode toggle
-# - Expand logging when DEBUG enabled
+# SCOUT TERMINAL VERSION: 3.51
+# CHANGES:
+# - Debug toggle moved to Logs tab
+# - Purge Logs moved to Logs tab
+# - Sidebar height stabilized
 
 import streamlit as st
 import pandas as pd
 import sqlite3
 import os
-import time
 import logging
 from datetime import datetime
 
@@ -17,7 +16,6 @@ st.set_page_config(page_title="SCOUT | Intelligence Terminal", layout="wide")
 
 LOG_FILE = "scout.log"
 
-# Initialize logging once
 if "log_level" not in st.session_state:
     st.session_state["log_level"] = logging.INFO
 
@@ -39,11 +37,10 @@ def get_db():
 
 # ---------------- COLLECTOR (STUB) ----------------
 def fake_search(targets, sources):
-    rows = []
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_event("DEBUG", f"Collector targets={targets}, sources={sources}", logging.DEBUG)
 
-    log_event("DEBUG", f"fake_search targets={targets}, sources={sources}", logging.DEBUG)
-
+    rows = []
     for src in sources:
         for t in targets:
             rows.append((
@@ -58,29 +55,9 @@ def fake_search(targets, sources):
 
 # ---------------- SIDEBAR ----------------
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.50")
-
-    # ---- Logging controls ----
-    st.subheader("📝 Logging")
-
-    debug_mode = st.toggle("Debug Mode", value=(st.session_state["log_level"] == logging.DEBUG))
-    if debug_mode:
-        set_log_level(logging.DEBUG)
-        log_event("LOG", "Debug logging enabled", logging.DEBUG)
-    else:
-        set_log_level(logging.INFO)
-
-    if st.button("🧹 Purge Logs", width="stretch"):
-        if os.path.exists(LOG_FILE):
-            open(LOG_FILE, "w").close()
-            log_event("LOG", "Logs purged")
-        st.rerun()
-
-    st.divider()
-
+    st.title("🛡️ SCOUT v3.51")
     conn = get_db()
 
-    # Global engines
     st.subheader("🌐 Global Engines")
     use_ebay = st.toggle("eBay", value=True)
     use_google = st.toggle("Google", value=True)
@@ -93,17 +70,14 @@ with st.sidebar:
 
     st.divider()
 
-    # Custom sites
     st.subheader("📡 Custom Sites")
     c_list = pd.read_sql_query("SELECT domain FROM custom_sites", conn)["domain"].tolist()
     active_customs = [s for s in c_list if st.toggle(s, value=True, key=f"site_{s}")]
 
     active_sources = engine_sources + active_customs
-    log_event("DEBUG", f"Active sources={active_sources}", logging.DEBUG)
 
     st.divider()
 
-    # Keywords
     with st.expander("🎯 Keyword Library", expanded=True):
         with st.form("add_keyword", clear_on_submit=True):
             nk = st.text_input("New Target")
@@ -126,13 +100,12 @@ with st.sidebar:
                 log_event("CONFIG", f"Deleted keyword '{t}'")
                 st.rerun()
 
+    st.markdown("<br>" * 2, unsafe_allow_html=True)
+
     if st.button("🚀 EXECUTE SWEEP", type="primary", width="stretch"):
         st.session_state["run_sweep"] = True
         st.session_state["sweep_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_event(
-            "SWEEP",
-            f"Started targets={selected_targets}, sources={active_sources}"
-        )
+        log_event("SWEEP", f"Started targets={selected_targets}, sources={active_sources}")
 
     conn.close()
 
@@ -146,7 +119,6 @@ with t_live:
     if st.session_state.get("run_sweep"):
         with st.status("📡 Sweeping…") as status:
             conn = get_db()
-
             rows = fake_search(selected_targets, active_sources)
 
             if rows:
@@ -181,7 +153,6 @@ with t_live:
             hide_index=True,
             column_config={"url": st.column_config.LinkColumn("URL")}
         )
-
         st.session_state["run_sweep"] = False
     else:
         st.info("Terminal ready.")
@@ -191,7 +162,6 @@ with t_arch:
     conn = get_db()
     df = pd.read_sql_query("SELECT * FROM items ORDER BY found_date DESC", conn)
     conn.close()
-
     st.dataframe(
         df,
         use_container_width=True,
@@ -236,6 +206,27 @@ with t_jobs:
 
 # ---------------- LOGS ----------------
 with t_logs:
-    if os.path.exists(LOG_FILE):
-        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-            st.code("".join(f.readlines()[-300:]))
+    st.subheader("📝 System Logs")
+
+    col1, col2 = st.columns([3, 1])
+
+    with col2:
+        debug_mode = st.toggle(
+            "Debug Mode",
+            value=(st.session_state["log_level"] == logging.DEBUG)
+        )
+        if debug_mode:
+            set_log_level(logging.DEBUG)
+            log_event("LOG", "Debug logging enabled", logging.DEBUG)
+        else:
+            set_log_level(logging.INFO)
+
+        if st.button("🧹 Purge Logs", width="stretch"):
+            if os.path.exists(LOG_FILE):
+                open(LOG_FILE, "w").close()
+            st.rerun()
+
+    with col1:
+        if os.path.exists(LOG_FILE):
+            with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                st.code("".join(f.readlines()[-300:]))
