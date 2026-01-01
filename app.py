@@ -1,5 +1,10 @@
-# SCOUT TERMINAL VERSION: 3.48
-# PURPOSE: First working execution pipeline (ad-hoc search inserts results)
+# SCOUT TERMINAL VERSION: 3.49
+# FIXES:
+# - Restored scheduler UI
+# - Wired global engine toggles
+# - Live Feed shows current sweep only
+# - URLs clickable
+# - Expanded logging
 
 import streamlit as st
 import pandas as pd
@@ -9,7 +14,7 @@ import time
 import logging
 from datetime import datetime
 
-# --- [1. SYSTEM CORE] ---
+# ---------------- SYSTEM CORE ----------------
 st.set_page_config(page_title="SCOUT | Intelligence Terminal", layout="wide")
 
 LOG_FILE = "scout.log"
@@ -25,35 +30,51 @@ def log_event(tag, msg):
 def get_db():
     return sqlite3.connect("scout.db", check_same_thread=False)
 
-# --- [2. COLLECTOR (PROOF OF LIFE)] ---
-def fake_search(targets, sites):
+# ---------------- COLLECTOR (STUB) ----------------
+def fake_search(targets, sources):
     rows = []
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    for site in sites:
+    for src in sources:
         for t in targets:
             rows.append((
                 now,
                 t,
-                site,
-                f"{t} vintage item on {site}",
+                src,
+                f"{t} listing on {src}",
                 "$199.99",
-                f"https://{site}/item/{t}"
+                f"https://{src}/search?q={t}"
             ))
     return rows
 
-# --- [3. SIDEBAR] ---
+# ---------------- SIDEBAR ----------------
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.48")
-
+    st.title("🛡️ SCOUT v3.49")
     conn = get_db()
 
-    st.subheader("📡 Deep Search Sites")
-    c_list = pd.read_sql_query("SELECT domain FROM custom_sites", conn)["domain"].tolist()
-    active_sites = [s for s in c_list if st.toggle(s, value=True, key=f"site_{s}")]
+    # Global engines
+    st.subheader("🌐 Global Engines")
+    use_ebay = st.toggle("eBay", value=True)
+    use_google = st.toggle("Google", value=True)
+    use_etsy = st.toggle("Etsy", value=True)
+
+    engine_sources = []
+    if use_ebay: engine_sources.append("ebay.com")
+    if use_google: engine_sources.append("google.com")
+    if use_etsy: engine_sources.append("etsy.com")
 
     st.divider()
 
+    # Custom sites
+    st.subheader("📡 Custom Sites")
+    c_list = pd.read_sql_query("SELECT domain FROM custom_sites", conn)["domain"].tolist()
+    active_customs = [s for s in c_list if st.toggle(s, value=True, key=f"site_{s}")]
+
+    active_sources = engine_sources + active_customs
+
+    st.divider()
+
+    # Keywords
     with st.expander("🎯 Keyword Library", expanded=True):
         with st.form("add_keyword", clear_on_submit=True):
             nk = st.text_input("New Target")
@@ -61,12 +82,11 @@ with st.sidebar:
                 if nk:
                     conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (nk,))
                     conn.commit()
-                    log_event("BUTTON", f"Added target '{nk}'")
+                    log_event("CONFIG", f"Added keyword '{nk}'")
                     st.rerun()
 
         t_list = pd.read_sql_query("SELECT name FROM targets", conn)["name"].tolist()
         selected_targets = []
-
         for t in t_list:
             c1, c2 = st.columns([4, 1])
             if c1.checkbox(t, value=True, key=f"sel_{t}"):
@@ -74,90 +94,121 @@ with st.sidebar:
             if c2.button("🗑️", key=f"del_{t}"):
                 conn.execute("DELETE FROM targets WHERE name=?", (t,))
                 conn.commit()
-                log_event("BUTTON", f"Deleted target '{t}'")
+                log_event("CONFIG", f"Deleted keyword '{t}'")
                 st.rerun()
 
-    st.markdown("<br>" * 4, unsafe_allow_html=True)
+    st.markdown("<br>" * 3, unsafe_allow_html=True)
 
     if st.button("🚀 EXECUTE SWEEP", type="primary", width="stretch"):
         st.session_state["run_sweep"] = True
-        log_event("BUTTON", "Manual sweep initiated")
+        st.session_state["sweep_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_event("SWEEP", f"Ad-hoc sweep started for targets={selected_targets}, sources={active_sources}")
 
     conn.close()
 
-# --- [4. MAIN UI] ---
+# ---------------- MAIN UI ----------------
 t_live, t_arch, t_jobs, t_logs = st.tabs(
     ["📡 Live Feed", "📜 Archive", "⚙️ Jobs & Config", "📝 Logs"]
 )
 
-# --- LIVE FEED ---
+# ---------------- LIVE FEED ----------------
 with t_live:
-    c_main, c_stat = st.columns([3, 1])
+    if st.session_state.get("run_sweep"):
+        with st.status("📡 Sweeping…") as status:
+            conn = get_db()
 
-    with c_main:
-        if st.session_state.get("run_sweep"):
-            with st.status("📡 Sweeping…") as status:
-                conn = get_db()
-
-                rows = fake_search(selected_targets, active_sites)
-
-                if rows:
-                    conn.executemany(
-                        """
-                        INSERT INTO items
-                        (found_date, target, source, title, price, url)
-                        VALUES (?,?,?,?,?,?)
-                        """,
-                        rows
-                    )
-                    conn.commit()
-                    log_event("ENGINE", f"Inserted {len(rows)} items")
-
-                results = pd.read_sql_query(
-                    "SELECT found_date, target, source, title, price, url FROM items ORDER BY found_date DESC",
-                    conn
+            rows = fake_search(selected_targets, active_sources)
+            if rows:
+                conn.executemany(
+                    """
+                    INSERT INTO items
+                    (found_date, target, source, title, price, url)
+                    VALUES (?,?,?,?,?,?)
+                    """,
+                    rows
                 )
+                conn.commit()
+                log_event("ENGINE", f"Inserted {len(rows)} items")
 
-                conn.close()
-                status.update(label=f"Sweep complete: {len(results)} total items", state="complete")
+            df = pd.read_sql_query(
+                """
+                SELECT found_date, target, source, title, price, url
+                FROM items
+                WHERE found_date >= ?
+                ORDER BY found_date DESC
+                """,
+                conn,
+                params=(st.session_state["sweep_ts"],)
+            )
 
-            st.dataframe(results, use_container_width=True, hide_index=True)
-            st.session_state["run_sweep"] = False
-        else:
-            st.info("Terminal ready.")
+            conn.close()
+            status.update(label=f"Sweep complete: {len(df)} new items", state="complete")
 
-    with c_stat:
-        st.subheader("📡 Status")
-        if os.path.exists(LOG_FILE):
-            with open(LOG_FILE, "r") as f:
-                lines = f.readlines()
-                st.code(lines[-1] if lines else "Ready")
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "url": st.column_config.LinkColumn("URL")
+            }
+        )
 
-# --- ARCHIVE ---
+        st.session_state["run_sweep"] = False
+    else:
+        st.info("Terminal ready.")
+
+# ---------------- ARCHIVE ----------------
 with t_arch:
     conn = get_db()
     df = pd.read_sql_query("SELECT * FROM items ORDER BY found_date DESC", conn)
     conn.close()
-    st.dataframe(df, use_container_width=True, hide_index=True)
 
-# --- JOBS & CONFIG ---
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "url": st.column_config.LinkColumn("URL")
+        }
+    )
+
+# ---------------- JOBS & CONFIG ----------------
 with t_jobs:
     st.header("⚙️ Jobs & Config")
 
     st.subheader("📡 Register New Site")
     with st.form("add_site", clear_on_submit=True):
-        ns = st.text_input("Domain (e.g. ebay.com)")
-        if st.form_submit_button("Add"):
+        ns = st.text_input("Domain (e.g. newegg.com)")
+        if st.form_submit_button("Add Site"):
             if ns:
                 conn = get_db()
                 conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (ns,))
                 conn.commit()
                 conn.close()
-                log_event("BUTTON", f"Added site '{ns}'")
+                log_event("CONFIG", f"Added site '{ns}'")
                 st.rerun()
 
-# --- LOGS ---
+    st.divider()
+
+    st.subheader("📅 Schedule Search")
+    with st.form("schedule_form"):
+        jn = st.text_input("Job Name")
+        jt = st.multiselect("Keywords", t_list)
+        jf = st.selectbox("Frequency", ["6 Hours", "12 Hours", "Daily"])
+        if st.form_submit_button("Save Job"):
+            if jn and jt:
+                conn = get_db()
+                conn.execute(
+                    "INSERT INTO schedules (job_name, frequency, target_list) VALUES (?,?,?)",
+                    (jn, jf, ",".join(jt))
+                )
+                conn.commit()
+                conn.close()
+                log_event("SCHEDULER", f"Saved job '{jn}' ({jf})")
+                st.rerun()
+
+# ---------------- LOGS ----------------
 with t_logs:
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-            st.code("".join(f.readlines()[-100:]))
+            st.code("".join(f.readlines()[-200:]))
