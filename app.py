@@ -10,21 +10,6 @@ from datetime import datetime
 # --- 1. CORE SYSTEM CONFIG ---
 st.set_page_config(page_title="SCOUT | Terminal", layout="wide")
 
-st.markdown("""
-    <style>
-    .stAppDeployButton {display:none;}
-    [data-testid="stDecoration"] {display:none;}
-    div[data-testid="stTabList"] {
-        position: sticky;
-        top: 0;
-        background-color: white;
-        z-index: 999;
-        padding-top: 10px;
-        border-bottom: 1px solid #f0f2f6;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
 # API Setup
 try:
     SERP_API_KEY = st.secrets["SERPAPI_KEY"]
@@ -38,14 +23,14 @@ def setup_logger():
     l = logging.getLogger("SCOUT")
     l.setLevel(logging.INFO)
     if not l.handlers:
-        h = logging.FileHandler(LOG_FILE)
+        h = logging.FileHandler(LOG_FILE, encoding='utf-8')
         h.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         l.addHandler(h)
     return l
 
 logger = setup_logger()
 
-# --- 2. DATABASE ---
+# --- 2. DATABASE & DATA CLEANING ---
 def get_db_connection():
     return sqlite3.connect("scout.db", check_same_thread=False)
 
@@ -53,6 +38,13 @@ def init_db():
     conn = get_db_connection()
     conn.execute('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, target TEXT, source TEXT, title TEXT, price TEXT, url TEXT UNIQUE)')
     conn.execute('CREATE TABLE IF NOT EXISTS targets (name TEXT PRIMARY KEY, frequency TEXT DEFAULT "Manual", last_run TIMESTAMP)')
+    
+    # --- AUTO-FIX OLD DATA (The Normalizer) ---
+    # This cleans up "ebay", "eBay", etc., and turns them all into "Ebay"
+    conn.execute("UPDATE items SET source = 'Ebay' WHERE LOWER(source) = 'ebay'")
+    conn.execute("UPDATE items SET source = 'Etsy' WHERE LOWER(source) = 'etsy'")
+    conn.execute("UPDATE items SET source = 'Google Shopping' WHERE LOWER(source) LIKE 'google%'")
+    
     conn.commit(); conn.close()
 
 init_db()
@@ -60,36 +52,44 @@ init_db()
 # --- 3. SCOUTING LOGIC ---
 def run_scout_mission(query, engine):
     url = "https://serpapi.com/search.json"
-    params = {"api_key": SERP_API_KEY, "engine": engine}
-    if engine == "ebay": params["_nkw"] = query
-    else: params["q"] = query
+    # Etsy sometimes fails with 400 if 'q' is empty or contains specific characters
+    # We ensure query is stripped of weird whitespace
+    clean_query = str(query).strip()
+    params = {"api_key": SERP_API_KEY, "engine": engine, "q": clean_query}
+    
+    if engine == "ebay": 
+        params.pop("q")
+        params["_nkw"] = clean_query
 
     try:
         response = requests.get(url, params=params, timeout=15)
-        data = response.json()
-        logger.info(f"Sweep: {engine} | Target: {query} | Status: {response.status_code}")
+        logger.info(f"Sweep: {engine} | Target: {clean_query} | Status: {response.status_code}")
         
+        if response.status_code != 200:
+            logger.error(f"SerpApi Error [{response.status_code}]: {response.text}")
+            return []
+
+        data = response.json()
         raw_items = []
         if engine == "ebay": raw_items = data.get("ebay_results", [])
         elif engine == "etsy": raw_items = data.get("etsy_results", [])
         elif engine == "google_shopping": raw_items = data.get("shopping_results", [])
 
         results = []
-        # Normalizing Source Labels for Dashboard consistency
         label_map = {"ebay": "Ebay", "etsy": "Etsy", "google_shopping": "Google Shopping"}
         source_label = label_map.get(engine, engine.title())
 
         if isinstance(raw_items, list):
             for i in raw_items[:20]:
                 p = i.get("price")
-                price_str = p.get("raw", "N/A") if isinstance(p, dict) else (p if p else "N/A")
+                price_str = p.get("raw", "N/A") if isinstance(p, dict) else (str(p) if p else "N/A")
                 results.append({
-                    "target": query, "source": source_label, "title": i.get("title", "No Title"),
+                    "target": clean_query, "source": source_label, "title": i.get("title", "No Title"),
                     "price": price_str, "url": i.get("link", i.get("product_link", "#"))
                 })
         return results
     except Exception as e:
-        logger.error(f"Error on {engine}: {str(e)}")
+        logger.error(f"Critical System Error: {str(e)}")
         return []
 
 # --- 4. SIDEBAR ---
@@ -150,20 +150,20 @@ with t_live:
     if st.session_state.get('last_results'):
         st.dataframe(pd.DataFrame(st.session_state['last_results']), use_container_width=True, hide_index=True)
     else:
-        st.info("System Ready. Add/Select keywords on the left.")
+        st.info("Ready. Use Sidebar to select targets and Execute.")
 
 with t_dash:
     conn = get_db_connection()
     df_all = pd.read_sql_query("SELECT source, target FROM items", conn)
     conn.close()
     if not df_all.empty:
-        st.subheader("🎯 Intelligence Overview")
-        # Standardizing pivot to handle any weird data cases
+        # Standardize casing one last time in the dataframe to be safe
+        df_all['source'] = df_all['source'].str.title()
         heatmap = df_all.groupby(['target', 'source']).size().unstack(fill_value=0)
+        st.subheader("🎯 Intelligence Overview")
         st.table(heatmap)
 
 with t_arch:
-    st.header("Intelligence Archive")
     conn = get_db_connection()
     arch_df = pd.read_sql_query("SELECT found_date, source, target, title, price, url FROM items ORDER BY found_date DESC LIMIT 100", conn)
     conn.close()
@@ -171,14 +171,13 @@ with t_arch:
 
 with t_conf:
     st.header("⚙️ Configuration")
-    st.subheader("1. Search Engines")
     c1, c2, c3 = st.columns(3)
     c1.toggle("eBay", value=True, key="p_ebay")
     c2.toggle("Etsy", value=True, key="p_etsy")
     c3.toggle("Google Shopping", value=True, key="p_google")
     
     st.divider()
-    st.subheader("2. Target Automation")
+    st.subheader("Automation Control")
     conn = get_db_connection()
     sched_df = pd.read_sql_query("SELECT * FROM targets", conn)
     conn.close()
@@ -187,23 +186,19 @@ with t_conf:
     for _, row in sched_df.iterrows():
         sc1, sc2, sc3 = st.columns([3, 2, 1])
         sc1.write(f"**{row['name']}**")
-        
-        # --- THE FIX: SAFETY CHECK FOR INDEX ---
-        current_val = row['frequency'] if row['frequency'] in options else "Manual"
-        idx = options.index(current_val)
-        
-        new_freq = sc2.selectbox("Freq:", options, index=idx, key=f"f_{row['name']}")
+        curr = row['frequency'] if row['frequency'] in options else "Manual"
+        new_freq = sc2.selectbox("Freq:", options, index=options.index(curr), key=f"f_{row['name']}")
         if new_freq != row['frequency']:
             conn = get_db_connection()
             conn.execute("UPDATE targets SET frequency = ? WHERE name = ?", (new_freq, row['name']))
             conn.commit(); conn.close()
             st.rerun()
-        sc3.write(f"Run: {row['last_run']}")
+        sc3.write(f"Last: {row['last_run']}")
 
 with t_logs:
-    if st.button("Clear Log History"):
+    if st.button("Clear Logs"):
         open(LOG_FILE, 'w').close()
         st.rerun()
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "r") as f:
-            st.code("".join(f.readlines()[-50:]))
+            st.code("".join(f.readlines()[-100:]))
