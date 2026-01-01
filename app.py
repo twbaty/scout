@@ -33,22 +33,46 @@ def init_db():
 
 # --- 3. SCRAPER ENGINES ---
 def scrape_ebay(query):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    url = f"https://www.ebay.com/sch/i.html?_nkw={query.replace(' ', '+')}&_sop=10"
+    # This 'User-Agent' makes us look like a real Chrome browser on Windows
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    
+    # We add '_nkw' for the keyword and '_sop=10' for 'Newly Listed'
+    url = f"https://www.ebay.com/sch/i.html?_nkw={query.replace(' ', '+')}&_sop=10&_ipg=24"
+    
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        listings = soup.find_all('div', {'class': 's-item__info'})
+        response = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # eBay often uses 's-item__wrapper' as the main container
+        items = soup.find_all('div', {'class': 's-item__info'})
+        
         results = []
-        for i in listings[1:8]:
-            title = i.find('div', {'class': 's-item__title'})
-            price = i.find('span', {'class': 's-item__price'})
-            link = i.find('a', {'class': 's-item__link'})
-            if title and price and link:
-                results.append({"target": query, "source": "eBay", "title": title.text.replace("New Listing", "").strip(), 
-                                 "price": price.text.strip(), "url": link['href'].split('?')[0]})
-        return results
-    except: return []
+        for item in items:
+            title_box = item.find('div', {'class': 's-item__title'})
+            # Filter out the "Shop on eBay" dummy result
+            if not title_box or "Shop on eBay" in title_box.text:
+                continue
+                
+            price = item.find('span', {'class': 's-item__price'})
+            link = item.find('a', {'class': 's-item__link'})
+            
+            if title_box and price and link:
+                results.append({
+                    "target": query,
+                    "source": "eBay",
+                    "title": title_box.text.replace("New Listing", "").strip(),
+                    "price": price.text.strip(),
+                    "url": link['href'].split('?')[0]
+                })
+        
+        # Return the top 10 real hits
+        return results[:10]
+    except Exception as e:
+        st.error(f"eBay Connection Error: {e}")
+        return []
 
 def scrape_etsy(query):
     headers = {"User-Agent": "Mozilla/5.0"}
