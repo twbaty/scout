@@ -10,11 +10,22 @@ from datetime import datetime
 # --- 1. CORE SYSTEM CONFIG ---
 st.set_page_config(page_title="SCOUT | Terminal", layout="wide")
 
-# Hide the "Deploy" button and other top-bar clutter for a cleaner look
+# REFINED STICKY TABS CSS
 st.markdown("""
     <style>
+    /* Hide Deploy Clutter */
     .stAppDeployButton {display:none;}
     [data-testid="stDecoration"] {display:none;}
+    
+    /* Stick Tabs to Top */
+    div[data-testid="stTabList"] {
+        position: sticky;
+        top: 0;
+        background-color: white;
+        z-index: 999;
+        padding-top: 10px;
+        border-bottom: 1px solid #f0f2f6;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -65,6 +76,7 @@ def run_scout_mission(query, engine):
 
         results = []
         for i in raw_items[:20]:
+            # Price extraction logic based on your JSON
             price_val = i.get("price")
             if isinstance(price_val, dict): price_val = price_val.get("raw", "N/A")
             
@@ -80,41 +92,20 @@ def run_scout_mission(query, engine):
         logger.error(f"Failure on {engine}: {str(e)}")
         return []
 
-# --- 4. SIDEBAR (Integrated Target Management) ---
+# --- 4. SIDEBAR (Ad-hoc Selection ONLY) ---
 with st.sidebar:
     st.title("🛡️ SCOUT")
+    st.write("### Target Selection")
     
-    # Section: Add New
-    with st.expander("➕ Register New Target", expanded=False):
-        new_k = st.text_input("Keyword:", key="sb_new_k")
-        if st.button("Add to Library", use_container_width=True):
-            if new_k:
-                conn = get_db_connection()
-                conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_k,))
-                conn.commit(); conn.close()
-                st.rerun()
-
-    st.divider()
-    
-    # Section: Selection & Deletion
-    st.write("### Mission Library")
     conn = get_db_connection()
     targets_df = pd.read_sql_query("SELECT name FROM targets", conn)
     conn.close()
     
-    selected_targets = []
-    for t in targets_df['name']:
-        col_t, col_d = st.columns([4, 1])
-        if col_t.checkbox(t, value=True, key=f"chk_{t}"):
-            selected_targets.append(t)
-        if col_d.button("🗑️", key=f"del_{t}"):
-            conn = get_db_connection()
-            conn.execute("DELETE FROM targets WHERE name = ?", (t,))
-            conn.commit(); conn.close()
-            st.rerun()
+    # Simple checkbox list for selecting which keywords to run
+    selected_targets = [t for t in targets_df['name'] if st.checkbox(t, value=True, key=f"sel_{t}")]
     
     st.divider()
-    run_mission = st.button("🚀 START SWEEP", use_container_width=True, type="primary")
+    run_mission = st.button("🚀 EXECUTE SWEEP", use_container_width=True, type="primary")
 
 # --- 5. TABS ---
 t_live, t_dash, t_arch, t_conf, t_logs = st.tabs(["📡 Live", "📊 Dashboard", "📜 Archive", "⚙️ Config", "🛠️ Logs"])
@@ -122,7 +113,7 @@ t_live, t_dash, t_arch, t_conf, t_logs = st.tabs(["📡 Live", "📊 Dashboard",
 with t_live:
     if run_mission and selected_targets:
         all_hits = []
-        with st.status("Gathering Intelligence...", expanded=True) as status:
+        with st.status("Gathering Intel...", expanded=True) as status:
             for target in selected_targets:
                 st.write(f"Scouting: **{target}**")
                 if st.session_state.get('p_ebay', True): all_hits.extend(run_scout_mission(target, "ebay"))
@@ -145,7 +136,7 @@ with t_live:
     if st.session_state.get('last_results'):
         st.dataframe(pd.DataFrame(st.session_state['last_results']), use_container_width=True, hide_index=True)
     else:
-        st.info("System Ready. Select targets in the sidebar and press Start Sweep.")
+        st.info("System Ready. Select keywords on the left and Execute Sweep.")
 
 with t_dash:
     conn = get_db_connection()
@@ -153,7 +144,6 @@ with t_dash:
     conn.close()
     if not df_all.empty:
         heatmap = df_all.groupby(['target', 'source']).size().unstack(fill_value=0)
-        st.subheader("🎯 Marketplace Distribution")
         st.table(heatmap)
 
 with t_arch:
@@ -166,15 +156,48 @@ with t_arch:
     conn = get_db_connection()
     arch_df = pd.read_sql_query(f"SELECT found_date, source, target, title, price, url FROM items ORDER BY found_date DESC {limit}", conn)
     conn.close()
-    st.dataframe(arch_df, column_config={"url": st.column_config.LinkColumn("Link")}, use_container_width=True, hide_index=True, height=600)
+    st.dataframe(arch_df, column_config={"url": st.column_config.LinkColumn("Link")}, use_container_width=True, hide_index=True, height=700)
 
 with t_conf:
-    st.header("Engine Configuration")
+    st.header("⚙️ Configuration")
+    
+    # ENGINE TOGGLES
     st.subheader("Marketplace Access")
     c1, c2, c3 = st.columns(3)
     c1.toggle("eBay", value=True, key="p_ebay")
     c2.toggle("Etsy", value=True, key="p_etsy")
     c3.toggle("Google Shopping", value=True, key="p_google")
+    
+    st.divider()
+
+    # ADD NEW TARGET
+    st.subheader("➕ Register New Target")
+    with st.form("add_new"):
+        reg_k = st.text_input("Keyword:")
+        reg_f = st.selectbox("Frequency:", ["Manual", "Daily", "Weekly"])
+        if st.form_submit_button("Register"):
+            if reg_k:
+                conn = get_db_connection()
+                conn.execute("INSERT OR IGNORE INTO targets (name, frequency) VALUES (?, ?)", (reg_k, reg_f))
+                conn.commit(); conn.close()
+                st.rerun()
+
+    st.divider()
+
+    # MANAGE TARGETS
+    st.subheader("📋 Managed Targets")
+    conn = get_db_connection()
+    ledger = pd.read_sql_query("SELECT * FROM targets", conn)
+    conn.close()
+    for _, row in ledger.iterrows():
+        lc1, lc2, lc3 = st.columns([3, 1, 0.5])
+        lc1.write(f"**{row['name']}**")
+        lc2.write(f"⏱️ {row['frequency']}")
+        if lc3.button("🗑️", key=f"mgr_{row['name']}"):
+            conn = get_db_connection()
+            conn.execute("DELETE FROM targets WHERE name = ?", (row['name'],))
+            conn.commit(); conn.close()
+            st.rerun()
 
 with t_logs:
     if st.button("Purge Logs"):
