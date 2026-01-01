@@ -5,99 +5,88 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import time
+import logging
 
-# --- 1. APP CONFIGURATION ---
+# --- 1. LOGGING CONFIGURATION ---
+# This creates a file 'scout.log' that tracks everything behind the scenes.
+logging.basicConfig(
+    filename='scout.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# --- 2. APP CONFIGURATION ---
 st.set_page_config(page_title="SCOUT | Intelligence Terminal", layout="wide")
 
-# Styling
-st.markdown("""
-    <style>
-    .main { background-color: #0e1117; }
-    div[data-testid="stMetricValue"] { font-size: 2rem; color: #58a6ff; }
-    .stDataFrame { border: 1px solid #30363d; border-radius: 8px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 2. DATABASE ENGINE ---
-def get_db_connection():
-    return sqlite3.connect("scout.db", check_same_thread=False)
-
-def init_db():
-    conn = get_db_connection()
-    conn.execute('''CREATE TABLE IF NOT EXISTS items 
-                 (id INTEGER PRIMARY KEY, found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
-                  target TEXT, source TEXT, title TEXT, price TEXT, url TEXT UNIQUE)''')
-    conn.execute('''CREATE TABLE IF NOT EXISTS targets (name TEXT PRIMARY KEY)''')
-    conn.commit()
-    conn.close()
-
-# --- 3. SCRAPER ENGINES ---
+# --- 3. SCRAPER ENGINES (Refined) ---
 def scrape_ebay(query):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
     }
-    
-    # Using a slightly different URL structure that is harder for eBay to block
     url = f"https://www.ebay.com/sch/i.html?_nkw={query.replace(' ', '+')}&_sop=10"
     
+    logger.info(f"Initiating eBay search for: {query}")
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=10)
+        logger.info(f"eBay Response: {resp.status_code} | Length: {len(resp.text)}")
         
-        # DEBUG: If this is 403, eBay is blocking you.
-        if response.status_code != 200:
-            st.warning(f"eBay returned Status {response.status_code}. They might be blocking automated access.")
-            return []
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        
-        # eBay uses different classes for different users. 
-        # This list covers the three most common 'title' classes.
-        items = soup.select('.s-item__info')
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # Broad selector to catch eBay's varying layouts
+        listings = soup.select('.s-item__info')
         
         results = []
-        for item in items:
-            # Attempt to find title in multiple common locations
-            title_elem = item.select_one('.s-item__title') or item.select_one('.s-item__title--has-tags')
+        for i in listings:
+            title = i.select_one('.s-item__title')
+            price = i.select_one('.s-item__price')
+            link = i.select_one('.s-item__link')
             
-            if not title_elem or "Shop on eBay" in title_elem.text:
-                continue
-                
-            price_elem = item.select_one('.s-item__price')
-            link_elem = item.select_one('.s-item__link')
-            
-            if title_elem and price_elem and link_elem:
+            if title and price and link and "Shop on eBay" not in title.text:
                 results.append({
-                    "target": query,
-                    "source": "eBay",
-                    "title": title_elem.text.replace("New Listing", "").strip(),
-                    "price": price_elem.text.strip(),
-                    "url": link_elem['href'].split('?')[0]
+                    "target": query, "source": "eBay", 
+                    "title": title.text.replace("New Listing", "").strip(), 
+                    "price": price.text.strip(), "url": link['href'].split('?')[0]
                 })
         
+        logger.info(f"eBay found {len(results)} items for {query}")
         return results[:10]
     except Exception as e:
-        st.error(f"Scraper encountered an error: {e}")
+        logger.error(f"eBay Scrape Failed: {e}")
         return []
 
 def scrape_etsy(query):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    url = f"https://www.etsy.com/search?q={query.replace(' ', '%20')}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    # Etsy often requires the ship_to parameter to show results consistently
+    url = f"https://www.etsy.com/search?q={query.replace(' ', '%20')}&ship_to=US"
+    
+    logger.info(f"Initiating Etsy search for: {query}")
     try:
         resp = requests.get(url, headers=headers, timeout=10)
+        logger.info(f"Etsy Response: {resp.status_code} | Length: {len(resp.text)}")
+        
         soup = BeautifulSoup(resp.text, "html.parser")
-        listings = soup.select('div.v2-listing-card__info')
+        # Updated Etsy selector for 2025
+        listings = soup.select('.v2-listing-card')
+        
         results = []
-        for i in listings[:5]:
-            title = i.find('h3')
-            price = i.find('span', {'class': 'currency-value'})
-            link = i.find_parents('a', limit=1)
+        for i in listings[:10]:
+            title = i.select_one('h3')
+            price = i.select_one('.currency-value')
+            link = i.select_one('a.listing-link')
+            
             if title and price and link:
-                results.append({"target": query, "source": "Etsy", "title": title.text.strip(), 
-                                 "price": f"${price.text}", "url": link[0]['href'].split('?')[0]})
+                results.append({
+                    "target": query, "source": "Etsy", 
+                    "title": title.text.strip(), 
+                    "price": f"${price.text}", "url": link['href'].split('?')[0]
+                })
+        
+        logger.info(f"Etsy found {len(results)} items for {query}")
         return results
-    except: return []
+    except Exception as e:
+        logger.error(f"Etsy Scrape Failed: {e}")
+        return []
 
 # --- 4. SIDEBAR MISSION CONTROL ---
 init_db()
