@@ -1,18 +1,17 @@
 # ============================================================
 # SCOUT – Intelligence Terminal
-# VERSION: 3.62
+# VERSION: 3.63
 #
 # STATUS:
 # - Google Search via SerpAPI: ENABLED
-# - eBay Marketplace (SerpAPI): PLANNED (disabled in UI)
-# - Amazon Marketplace (SerpAPI): PLANNED (disabled in UI)
-# - Etsy Marketplace (SerpAPI): PLANNED (disabled in UI)
+# - eBay Marketplace (SerpAPI): PLANNED
+# - Amazon Marketplace (SerpAPI): PLANNED
+# - Etsy Marketplace (SerpAPI): PLANNED
 #
 # NOTES:
-# - Site-based searches are performed via Google dorking:
-#   site:<domain> <keyword>
-# - API key loaded from .streamlit/secrets.toml
-# - UI is intentionally explicit about active vs planned engines
+# - Google is the only active engine
+# - Engines are configurable in Jobs & Config
+# - Sidebar is limited to execution controls
 # ============================================================
 
 import streamlit as st
@@ -80,37 +79,23 @@ def google_serpapi_dork(keyword, domain):
     log_event("COLLECTOR", f"{len(rows)} results for {query}")
     return rows
 
-# ---------------- SIDEBAR ----------------
+# ---------------- SIDEBAR (EXECUTION ONLY) ----------------
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.62")
-
-    st.subheader("🔍 Search Engines (SerpAPI)")
-    st.checkbox("Google (site-based)", value=True, disabled=True)
-    st.checkbox("eBay (Marketplace)", value=False, disabled=True, help="Planned")
-    st.checkbox("Amazon (Marketplace)", value=False, disabled=True, help="Planned")
-    st.checkbox("Etsy (Marketplace)", value=False, disabled=True, help="Planned")
-
-    st.caption("Active engine: Google Search via SerpAPI")
-    st.divider()
+    st.title("🛡️ SCOUT v3.63")
 
     conn = get_db()
-    st.subheader("📡 Sites (searched via Google)")
+
+    st.subheader("📡 Sites (Google)")
     sites = pd.read_sql_query("SELECT domain FROM custom_sites", conn)["domain"].tolist()
     active_sites = [s for s in sites if st.toggle(s, value=True, key=f"site_{s}")]
 
     st.divider()
 
-    with st.expander("🎯 Keywords", expanded=True):
-        with st.form("add_keyword", clear_on_submit=True):
-            nk = st.text_input("New Keyword")
-            if st.form_submit_button("＋") and nk:
-                conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (nk,))
-                conn.commit()
-                log_event("CONFIG", f"Added keyword '{nk}'")
-                st.rerun()
+    st.subheader("🎯 Keywords")
+    t_list = pd.read_sql_query("SELECT name FROM targets", conn)["name"].tolist()
+    selected_targets = [t for t in t_list if st.checkbox(t, value=True, key=f"kw_{t}")]
 
-        t_list = pd.read_sql_query("SELECT name FROM targets", conn)["name"].tolist()
-        selected_targets = [t for t in t_list if st.checkbox(t, value=True, key=f"kw_{t}")]
+    st.divider()
 
     if st.button("🚀 EXECUTE SWEEP", type="primary", width="stretch"):
         st.session_state["run_sweep"] = True
@@ -119,7 +104,7 @@ with st.sidebar:
 
     conn.close()
 
-# ---------------- MAIN ----------------
+# ---------------- MAIN TABS ----------------
 t_live, t_arch, t_jobs, t_logs = st.tabs(
     ["📡 Live Feed", "📜 Archive", "⚙️ Jobs & Config", "📝 Logs"]
 )
@@ -183,17 +168,84 @@ with t_arch:
         column_config={"url": st.column_config.LinkColumn("URL")}
     )
 
-# ---------------- JOBS ----------------
+# ---------------- JOBS & CONFIG ----------------
 with t_jobs:
-    st.subheader("📡 Add Site (Google Search)")
+    st.header("⚙️ Jobs & Config")
+
+    # ---- Engines ----
+    st.subheader("🔍 Search Engines (SerpAPI)")
+    st.toggle("Google (site-based)", value=True, disabled=False)
+    st.toggle("eBay Marketplace", value=False, disabled=True, help="Planned")
+    st.toggle("Amazon Marketplace", value=False, disabled=True, help="Planned")
+    st.toggle("Etsy Marketplace", value=False, disabled=True, help="Planned")
+
+    st.divider()
+
+    # ---- Sites ----
+    st.subheader("📡 Manage Sites")
+    conn = get_db()
+    sites_df = pd.read_sql_query("SELECT domain FROM custom_sites", conn)
+    for s in sites_df["domain"]:
+        c1, c2 = st.columns([5, 1])
+        c1.write(s)
+        if c2.button("🗑️", key=f"del_site_{s}"):
+            conn.execute("DELETE FROM custom_sites WHERE domain = ?", (s,))
+            conn.commit()
+            log_event("CONFIG", f"Deleted site '{s}'")
+            st.rerun()
+
     with st.form("add_site", clear_on_submit=True):
-        ns = st.text_input("Domain (e.g. vintage-computer.com)")
+        ns = st.text_input("Add new site")
         if st.form_submit_button("Add Site") and ns:
-            conn = get_db()
             conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (ns,))
             conn.commit()
-            conn.close()
             log_event("CONFIG", f"Added site '{ns}'")
+            st.rerun()
+
+    conn.close()
+
+    st.divider()
+
+    # ---- Keywords ----
+    st.subheader("🎯 Manage Keywords")
+    conn = get_db()
+    kw_df = pd.read_sql_query("SELECT name FROM targets", conn)
+    for k in kw_df["name"]:
+        c1, c2 = st.columns([5, 1])
+        c1.write(k)
+        if c2.button("🗑️", key=f"del_kw_{k}"):
+            conn.execute("DELETE FROM targets WHERE name = ?", (k,))
+            conn.commit()
+            log_event("CONFIG", f"Deleted keyword '{k}'")
+            st.rerun()
+
+    with st.form("add_keyword", clear_on_submit=True):
+        nk = st.text_input("Add new keyword")
+        if st.form_submit_button("Add Keyword") and nk:
+            conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (nk,))
+            conn.commit()
+            log_event("CONFIG", f"Added keyword '{nk}'")
+            st.rerun()
+
+    conn.close()
+
+    st.divider()
+
+    # ---- Scheduler ----
+    st.subheader("📅 Schedule Search")
+    with st.form("schedule_form"):
+        jn = st.text_input("Job Name")
+        jf = st.selectbox("Frequency", ["6 Hours", "12 Hours", "Daily"])
+        jt = st.multiselect("Keywords", t_list)
+        if st.form_submit_button("Save Job") and jn and jt:
+            conn = get_db()
+            conn.execute(
+                "INSERT INTO schedules (job_name, frequency, target_list) VALUES (?,?,?)",
+                (jn, jf, ",".join(jt))
+            )
+            conn.commit()
+            conn.close()
+            log_event("SCHEDULER", f"Saved job '{jn}' ({jf})")
             st.rerun()
 
 # ---------------- LOGS ----------------
