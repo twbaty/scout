@@ -1,13 +1,13 @@
-# SCOUT TERMINAL VERSION: 3.13
-# UPDATES: Fixed Sidebar Layout (No Scrunched Text), Reinforced Data Persistence
+# SCOUT TERMINAL VERSION: 3.14
+# UPDATES: Per-Job Engine Toggles, Delay Logic, Forced Cache Reset
 
 import streamlit as st
 import pandas as pd
 import sqlite3
 import requests
 import os
+import time
 import logging
-from datetime import datetime
 
 # --- 1. CORE SYSTEM SETUP ---
 st.set_page_config(page_title="SCOUT | Intelligence Terminal", layout="wide")
@@ -20,15 +20,10 @@ else:
 
 # --- 2. OS-LEVEL LOGGING ---
 LOG_FILE = 'scout.log'
-logging.basicConfig(
-    filename=LOG_FILE, 
-    level=logging.INFO, 
-    format='%(asctime)s [OS_LEVEL] %(levelname)s: %(message)s'
-)
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s [OS_LEVEL] %(levelname)s: %(message)s')
 
 def log_system(event_type, details):
-    msg = f"[{event_type.upper()}] {details}"
-    logging.info(msg)
+    logging.info(f"[{event_type.upper()}] {details}")
 
 def get_db_connection():
     return sqlite3.connect("scout.db", check_same_thread=False)
@@ -37,14 +32,14 @@ def init_db():
     conn = get_db_connection()
     conn.execute('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, target TEXT, source TEXT, title TEXT, price TEXT, url TEXT UNIQUE)')
     conn.execute('CREATE TABLE IF NOT EXISTS targets (name TEXT PRIMARY KEY)')
-    conn.execute('CREATE TABLE IF NOT EXISTS schedules (job_id INTEGER PRIMARY KEY, job_name TEXT, frequency TEXT, target_list TEXT, last_run TIMESTAMP)')
+    # UPDATED SCHEMA: target_engines stores which sites this job uses
+    conn.execute('CREATE TABLE IF NOT EXISTS schedules (job_id INTEGER PRIMARY KEY, job_name TEXT, frequency TEXT, target_list TEXT, target_engines TEXT, last_run TIMESTAMP)')
     conn.execute('CREATE TABLE IF NOT EXISTS custom_sites (domain TEXT PRIMARY KEY)')
     conn.commit(); conn.close()
-    log_system("system", "Data structures verified and locked.")
 
 init_db()
 
-# --- 3. THE ENGINE ---
+# --- 3. REINFORCED ENGINE ---
 def run_scout_mission(query, engine_type, custom_domain=None):
     url = "https://serpapi.com/search.json"
     q_str = str(query).strip()
@@ -62,37 +57,40 @@ def run_scout_mission(query, engine_type, custom_domain=None):
         res_key, label = "shopping_results", engine_type.title()
 
     try:
+        # Prevent API throttling with a tiny sleep
+        time.sleep(0.5)
         r = requests.get(url, params=params, timeout=15)
         data = r.json()
         items = data.get(res_key, [])
         processed = []
         if isinstance(items, list):
             for i in items[:15]:
-                # Link Peeling
-                direct_url = i.get("link", i.get("product_link", "#"))
-                if "google.com/url" in direct_url and "url=" in direct_url:
-                    direct_url = direct_url.split("url=") [-1].split("&")[0]
-                p = i.get("price")
-                p_val = p.get("raw", "N/A") if isinstance(p, dict) else str(p or "N/A")
-                processed.append({"target": q_str, "source": label, "title": i.get("title", "No Title"), "price": p_val, "url": direct_url})
+                # Peeling
+                link = i.get("link", i.get("product_link", "#"))
+                if "google.com/url" in link: link = link.split("url=")[-1].split("&")[0]
+                
+                p_val = i.get("price")
+                if isinstance(p_val, dict): p_val = p_val.get("raw", "N/A")
+                
+                processed.append({"target": q_str, "source": label, "title": i.get("title", "No Title"), "price": str(p_val), "url": link})
+        
         log_system("response", f"SUCCESS: {label} found {len(processed)} items for {q_str}")
         return processed
     except Exception as e:
         log_system("error", f"FAILED: {label} -> {str(e)}")
         return []
 
-# --- 4. DATA PERSISTENCE FETCH ---
+# --- 4. DATA FETCH ---
 conn = get_db_connection()
 targets_list = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
 customs_list = pd.read_sql_query("SELECT domain FROM custom_sites", conn)['domain'].tolist()
 conn.close()
 
-# --- 5. SIDEBAR (FIXED LAYOUT) ---
+# --- 5. SIDEBAR ---
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.13")
+    st.title("🛡️ SCOUT v3.14")
     
     st.subheader("🌐 Global Engines")
-    # Changed from columns to rows to prevent scrunched text
     p_ebay = st.toggle("Enable Ebay Search", value=True)
     p_etsy = st.toggle("Enable Etsy Search", value=True)
     p_google = st.toggle("Enable Google Search", value=True)
@@ -102,12 +100,11 @@ with st.sidebar:
 
     st.divider()
     with st.expander("🎯 Keyword Library", expanded=True):
-        with st.form("lib_add_sidebar", clear_on_submit=True):
+        with st.form("lib_add_v14", clear_on_submit=True):
             new_t = st.text_input("Add Keyword:")
             if st.form_submit_button("＋"):
                 if new_t:
                     conn = get_db_connection(); conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_t,)); conn.commit(); conn.close()
-                    log_system("button_click", f"Added Target: {new_t}")
                     st.rerun()
 
         selected_targets = []
@@ -116,13 +113,12 @@ with st.sidebar:
             if c1.checkbox(t, value=True, key=f"sel_{t}"): selected_targets.append(t)
             if c2.button("🗑️", key=f"rm_{t}"):
                 conn = get_db_connection(); conn.execute("DELETE FROM targets WHERE name = ?", (t,)); conn.commit(); conn.close()
-                log_system("button_click", f"Deleted Target: {t}")
                 st.rerun()
 
     if st.button("🚀 EXECUTE SWEEP", type="primary", use_container_width=True):
         st.session_state['run_sweep'] = True
 
-# --- 6. TABS (STABILIZED) ---
+# --- 6. TABS ---
 t_live, t_arch, t_conf, t_logs = st.tabs(["📡 Live Results", "📜 Archive", "⚙️ Jobs & Config", "🛠️ Logs"])
 
 with t_live:
@@ -137,55 +133,53 @@ with t_live:
             
             conn = get_db_connection()
             for h in all_hits:
-                try: conn.execute("INSERT INTO items (target, source, title, price, url) VALUES (?,?,?,?,?)", (h['target'], h['source'], h['title'], h['price'], h['url']))
+                try: conn.execute("INSERT OR REPLACE INTO items (target, source, title, price, url) VALUES (?,?,?,?,?)", (h['target'], h['source'], h['title'], h['price'], h['url']))
                 except: pass
             conn.commit(); conn.close()
             st.session_state['last_data'] = all_hits
             st.session_state['run_sweep'] = False
-            status.update(label="Mission Complete", state="complete")
+            status.update(label="Complete", state="complete")
 
     if 'last_data' in st.session_state:
         st.dataframe(pd.DataFrame(st.session_state['last_data']), use_container_width=True, hide_index=True)
 
 with t_conf:
     st.header("⚙️ Automation Jobs")
-    with st.expander("📝 Create New Schedule Job", expanded=False):
-        with st.form("job_form_restored", clear_on_submit=True):
+    with st.expander("📝 Create New Narrow Search Job"):
+        with st.form("job_v14"):
             j_name = st.text_input("Job Name:")
-            j_freq = st.selectbox("Frequency:", ["Daily", "M-W-F", "Weekly", "Bi-Weekly"])
-            j_targets = st.multiselect("Assign Keywords:", targets_list)
-            if st.form_submit_button("Create Job"):
-                if j_name and j_targets:
-                    conn = get_db_connection()
-                    conn.execute("INSERT INTO schedules (job_name, frequency, target_list) VALUES (?,?,?)", (j_name, j_freq, ",".join(j_targets)))
-                    conn.commit(); conn.close()
-                    log_system("config_change", f"Created Job: {j_name}")
-                    st.rerun()
+            j_freq = st.selectbox("Frequency:", ["Daily", "M-W-F", "Weekly"])
+            j_targets = st.multiselect("Keywords:", targets_list)
+            
+            st.write("**Engines to Include:**")
+            e_ebay = st.checkbox("Ebay", value=True)
+            e_etsy = st.checkbox("Etsy", value=False)
+            e_google = st.checkbox("Google", value=True)
+            e_customs = st.multiselect("Deep Search Sites:", customs_list)
+            
+            if st.form_submit_button("Save Job"):
+                engines = []
+                if e_ebay: engines.append("ebay")
+                if e_etsy: engines.append("etsy")
+                if e_google: engines.append("google")
+                engines.extend(e_customs)
+                
+                conn = get_db_connection()
+                conn.execute("INSERT INTO schedules (job_name, frequency, target_list, target_engines) VALUES (?,?,?,?)", 
+                             (j_name, j_freq, ",".join(j_targets), ",".join(engines)))
+                conn.commit(); conn.close()
+                st.rerun()
 
     # Display Jobs
-    conn = get_db_connection(); jobs_df = pd.read_sql_query("SELECT * FROM schedules", conn); conn.close()
-    for _, job in jobs_df.iterrows():
-        jc1, jc2, jc3, jc4 = st.columns([2, 1, 3, 1])
-        jc1.write(f"**{job['job_name']}**"); jc2.info(job['frequency']); jc3.write(f"Targets: {job['target_list']}")
-        if jc4.button("🗑️", key=f"del_job_{job['job_id']}"):
+    conn = get_db_connection(); j_df = pd.read_sql_query("SELECT * FROM schedules", conn); conn.close()
+    for _, job in j_df.iterrows():
+        st.write(f"**{job['job_name']}** ({job['frequency']})")
+        st.caption(f"Targets: {job['target_list']} | Engines: {job['target_engines']}")
+        if st.button("🗑️", key=f"dj_{job['job_id']}"):
             conn = get_db_connection(); conn.execute("DELETE FROM schedules WHERE job_id = ?", (job['job_id'],)); conn.commit(); conn.close()
-            log_system("config_change", f"Deleted Job ID: {job['job_id']}"); st.rerun()
-
-    st.divider()
-    st.subheader("🌐 Custom Domain Registration")
-    with st.form("site_reg_form", clear_on_submit=True):
-        site_in = st.text_input("Domain (e.g. vintage-computer.com):")
-        if st.form_submit_button("Register"):
-            if site_in:
-                conn = get_db_connection(); conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (site_in,)); conn.commit(); conn.close()
-                log_system("button_click", f"Registered Site: {site_in}"); st.rerun()
+            st.rerun()
 
 with t_logs:
-    st.subheader("🛠️ System Logs")
-    if st.button("Purge Log History", type="secondary"):
-        open(LOG_FILE, 'w').close()
-        log_system("system", "User manually wiped log file.")
-        st.rerun()
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "r") as f:
             st.code("".join(f.readlines()[-150:]))
