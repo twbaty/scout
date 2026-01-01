@@ -41,27 +41,25 @@ def scout_ebay(query):
     params = {
         "engine": "ebay",
         "_nkw": query,
-        "api_key": SERP_API_KEY,
-        "ebay_domain": "ebay.com",
-        "sort": "newly_listed"
+        "api_key": SERP_API_KEY
     }
-    logger.info(f"API Scouting eBay: {query}")
     try:
-        response = requests.get(url, params=params, timeout=15)
+        response = requests.get(url, params=params)
         data = response.json()
+        
+        # DEBUG: This will show us if the API is actually mad at us
+        if "error" in data:
+            logger.error(f"SerpApi Error: {data['error']}")
+            return []
+            
+        # Check if the key name is actually correct
         items = data.get("ebay_results", [])
-        results = []
-        for item in items[:10]:
-            results.append({
-                "target": query, "source": "eBay",
-                "title": item.get("title"),
-                "price": item.get("price", {}).get("raw", "N/A"),
-                "url": item.get("link")
-            })
-        logger.info(f"eBay API found {len(results)} items.")
-        return results
+        if not items:
+            logger.warning(f"API returned 200 but 'ebay_results' is empty. Keys found: {list(data.keys())}")
+            
+        return [{"title": i.get("title"), "price": i.get("price", {}).get("raw"), "url": i.get("link")} for i in items]
     except Exception as e:
-        logger.error(f"eBay API Error: {e}")
+        logger.error(f"Critical API Failure: {e}")
         return []
 
 def scout_etsy(query):
