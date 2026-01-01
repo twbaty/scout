@@ -17,10 +17,22 @@ st.markdown("""
 # --- DATABASE LOGIC ---
 def get_stats():
     conn = sqlite3.connect("scout.db")
-    # Total items in 90 days
-    total = pd.read_sql_query("SELECT count(*) as count FROM items", conn).iloc[0]['count']
-    # Newest items found in last 24 hours
-    daily = pd.read_sql_query("SELECT count(*) as count FROM items WHERE found_date > datetime('now', '-1 day')", conn).iloc[0]['count']
+    c = conn.cursor()
+    
+    # 1. THE SAFETY NET: Create the table if it's missing
+    c.execute('''CREATE TABLE IF NOT EXISTS items 
+                 (id INTEGER PRIMARY KEY, 
+                  found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+                  target TEXT, title TEXT, price TEXT, url TEXT UNIQUE)''')
+    conn.commit()
+
+    # 2. Proceed with the counts
+    try:
+        total = pd.read_sql_query("SELECT count(*) as count FROM items", conn).iloc[0]['count']
+        daily = pd.read_sql_query("SELECT count(*) as count FROM items WHERE found_date > datetime('now', '-1 day')", conn).iloc[0]['count']
+    except Exception:
+        total, daily = 0, 0
+        
     conn.close()
     return total, daily
 
