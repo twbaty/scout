@@ -43,7 +43,7 @@ def run_scout_mission(query, engine):
     try:
         response = requests.get(url, params=params, timeout=15)
         data = response.json()
-        # Handle the specific 'organic_results' key you found earlier
+        # Ensure we check the right keys for results
         items = data.get("organic_results") or data.get("ebay_results") or data.get("etsy_results") or []
         return [{"target": query, "source": engine.capitalize(), "title": i.get("title"), "price": i.get("price", {}).get("raw") or i.get("price"), "url": i.get("link")} for i in items[:15]]
     except Exception as e:
@@ -54,35 +54,22 @@ def run_scout_mission(query, engine):
 with st.sidebar:
     st.title("🛡️ Scout Mission")
     
-    with st.expander("📚 Library Management", expanded=False):
-        new_t = st.text_input("New Keyword:")
-        if st.button("➕ Add"):
-            if new_t:
-                conn = get_db_connection()
-                conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_t,))
-                conn.commit(); conn.close()
-                st.rerun()
-        
-        st.divider()
-        conn = get_db_connection()
-        all_targets = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
-        conn.close()
-        target_to_del = st.selectbox("Remove:", ["-- Select --"] + all_targets)
-        if st.button("🗑️ Delete"):
-            if target_to_del != "-- Select --":
-                conn = get_db_connection()
-                conn.execute("DELETE FROM targets WHERE name = ?", (target_to_del,))
-                conn.commit(); conn.close()
-                st.rerun()
-
-    st.divider()
-    st.write("Active Targets:")
+    # Quick Status
+    conn = get_db_connection()
+    all_targets = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
+    conn.close()
+    
+    st.write("### Active Targets")
     selected = [t for t in all_targets if st.checkbox(t, value=True, key=f"active_{t}")]
     
     st.divider()
     run_mission = st.button("🚀 EXECUTE SWEEP", use_container_width=True, type="primary")
+    
+    if st.button("🧹 Clear Live Results"):
+        st.session_state['last_results'] = []
+        st.rerun()
 
-# --- 5. THE TABS (MAIN INTERFACE) ---
+# --- 5. THE TABS (THE COMMAND CENTER) ---
 t_live, t_dash, t_arch, t_conf, t_logs = st.tabs([
     "📡 Live Intelligence", 
     "📊 Intelligence Dashboard", 
@@ -102,20 +89,21 @@ with t_live:
                 if st.session_state.get('p_etsy', True): all_hits.extend(run_scout_mission(target, "etsy"))
                 time.sleep(1)
             
-            # Save to DB
             conn = get_db_connection()
             for h in all_hits:
                 try:
-                    conn.execute("INSERT INTO items (target, source, title, price, url) VALUES (?, ?, ?, ?, ?)", (h['target'], h['source'], h['title'], h['price'], h['url']))
+                    conn.execute("INSERT INTO items (target, source, title, price, url) VALUES (?, ?, ?, ?, ?)", 
+                                 (h['target'], h['source'], h['title'], h['price'], h['url']))
                 except: pass
             conn.commit(); conn.close()
+            st.session_state['last_results'] = all_hits
             status.update(label="✅ Sweep Complete!", state="complete")
-        
-        if all_hits:
-            st.subheader("🚨 New Findings Found")
-            st.dataframe(pd.DataFrame(all_hits), use_container_width=True, hide_index=True)
+    
+    if 'last_results' in st.session_state and st.session_state['last_results']:
+        st.subheader("🚨 New Session Findings")
+        st.dataframe(pd.DataFrame(st.session_state['last_results']), use_container_width=True, hide_index=True)
     else:
-        st.info("No active session. Toggle targets in the sidebar and hit 'Execute Sweep'.")
+        st.info("No active findings. Execute a sweep from the sidebar.")
 
 # TAB 2: DASHBOARD
 with t_dash:
@@ -123,32 +111,67 @@ with t_dash:
     conn = get_db_connection()
     total = pd.read_sql_query("SELECT count(*) as c FROM items", conn).iloc[0]['c']
     sources = pd.read_sql_query("SELECT source, count(*) as count FROM items GROUP BY source", conn)
+    targets_stats = pd.read_sql_query("SELECT target, count(*) as count FROM items GROUP BY target", conn)
     conn.close()
     
-    m1, m2 = st.columns(2)
-    m1.metric("Items in Archive", total)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Archive Total", total)
     m2.metric("Marketplaces", len(sources))
-    st.bar_chart(sources.set_index('source'))
+    m3.metric("Unique Keywords", len(targets_stats))
+    
+    st.write("### Hits by Target")
+    st.bar_chart(targets_stats.set_index('target'))
+
+# TAB 4: SYSTEM CONFIGURATION (RE-POWERED)
+with t_conf:
+    st.header("Engine Room & Library")
+    
+    col_lib, col_settings = st.columns(2)
+    
+    with col_lib:
+        st.subheader("📚 Library Management")
+        new_t = st.text_input("Add New Target Keyword:", placeholder="e.g. Vintage Cowboy Spurs")
+        if st.button("➕ Add to Library"):
+            if new_t:
+                conn = get_db_connection()
+                conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_t,))
+                conn.commit(); conn.close()
+                st.success(f"Added '{new_t}'")
+                st.rerun()
+        
+        st.divider()
+        target_to_del = st.selectbox("Remove from Library:", ["-- Select --"] + all_targets)
+        if st.button("🗑️ Delete Selected"):
+            if target_to_del != "-- Select --":
+                conn = get_db_connection()
+                conn.execute("DELETE FROM targets WHERE name = ?", (target_to_del,))
+                conn.commit(); conn.close()
+                st.rerun()
+
+    with col_settings:
+        st.subheader("🔧 System Preferences")
+        st.toggle("Search eBay", value=True, key="p_ebay")
+        st.toggle("Search Etsy", value=True, key="p_etsy")
+        st.toggle("Search Google Shopping", value=True, key="p_google")
+        
+        st.divider()
+        st.subheader("⏰ Mission Scheduler")
+        st.select_slider("Automated Sweep Frequency", options=["Manual Only", "1h", "6h", "Daily"], key="p_freq")
+        
+        if st.button("🧨 Wipe Intelligence Database"):
+            if st.checkbox("Confirm Complete Wipe?"):
+                conn = get_db_connection()
+                conn.execute("DELETE FROM items")
+                conn.commit(); conn.close()
+                st.warning("Database Cleared.")
 
 # TAB 3: ARCHIVE
 with t_arch:
-    st.header("Historical Intel")
+    st.header("The Intelligence Vault")
     conn = get_db_connection()
     history = pd.read_sql_query("SELECT found_date, source, target, title, price, url FROM items ORDER BY found_date DESC", conn)
     conn.close()
     st.dataframe(history, column_config={"url": st.column_config.LinkColumn("Link")}, use_container_width=True, hide_index=True)
-
-# TAB 4: CONFIG
-with t_conf:
-    st.header("Mission Preferences")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Site Toggles")
-        st.toggle("Search eBay", value=True, key="p_ebay")
-        st.toggle("Search Etsy", value=True, key="p_etsy")
-    with c2:
-        st.subheader("Search Logic")
-        st.select_slider("Mission Frequency", options=["Manual", "1h", "6h", "Daily"], key="p_freq")
 
 # TAB 5: LOGS
 with t_logs:
