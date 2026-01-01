@@ -1,17 +1,18 @@
 # ============================================================
 # SCOUT – Intelligence Terminal
-# VERSION: 3.64
+# VERSION: 3.65
 #
-# STATUS:
-# - Google Search via SerpAPI: ENABLED
-# - eBay Marketplace (SerpAPI): PLANNED
-# - Amazon Marketplace (SerpAPI): PLANNED
-# - Etsy Marketplace (SerpAPI): PLANNED
+# CONTROL PLANES:
+# - Live Feed: Ad-hoc execution & scope
+# - Jobs & Config: Definition, deletion, scheduling
 #
-# NOTES:
-# - Google is the only active engine
-# - Engines are configurable in Jobs & Config
-# - Sidebar is limited to execution controls
+# ACTIVE ENGINE:
+# - Google Search via SerpAPI
+#
+# PLANNED ENGINES:
+# - eBay Marketplace (SerpAPI)
+# - Amazon Marketplace (SerpAPI)
+# - Etsy Marketplace (SerpAPI)
 # ============================================================
 
 import streamlit as st
@@ -79,40 +80,60 @@ def google_serpapi_dork(keyword, domain):
     log_event("COLLECTOR", f"{len(rows)} results for {query}")
     return rows
 
-# ---------------- SIDEBAR (EXECUTION ONLY) ----------------
+# ---------------- SIDEBAR ----------------
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.64")
-
-    conn = get_db()
-
-    st.subheader("📡 Sites (Google)")
-    sites = pd.read_sql_query("SELECT domain FROM custom_sites", conn)["domain"].tolist()
-    active_sites = [s for s in sites if st.toggle(s, value=True, key=f"site_{s}")]
-
-    st.divider()
-
-    st.subheader("🎯 Keywords")
-    t_list = pd.read_sql_query("SELECT name FROM targets", conn)["name"].tolist()
-    selected_targets = [t for t in t_list if st.checkbox(t, value=True, key=f"kw_{t}")]
-
-    st.divider()
-
-    if st.button("🚀 EXECUTE SWEEP", type="primary", width="stretch"):
-        st.session_state["run_sweep"] = True
-        st.session_state["sweep_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_event("SWEEP", f"targets={selected_targets} sites={active_sites}")
-
-    conn.close()
+    st.title("🛡️ SCOUT")
+    st.caption("Keyword-based collectibles search")
 
 # ---------------- MAIN TABS ----------------
 t_live, t_arch, t_jobs, t_logs = st.tabs(
     ["📡 Live Feed", "📜 Archive", "⚙️ Jobs & Config", "📝 Logs"]
 )
 
-# ---------------- LIVE FEED ----------------
+# ---------------- LIVE FEED (AD-HOC CONTROL) ----------------
 with t_live:
+    st.subheader("🔍 Search Engines")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        google_enabled = st.toggle("Google (site-based)", value=True)
+    with c2:
+        st.toggle("eBay Marketplace", value=False, disabled=True, help="Planned")
+    with c3:
+        st.toggle("Amazon Marketplace", value=False, disabled=True, help="Planned")
+    with c4:
+        st.toggle("Etsy Marketplace", value=False, disabled=True, help="Planned")
+
+    st.divider()
+
+    conn = get_db()
+
+    st.subheader("📡 Sites")
+    sites = pd.read_sql_query("SELECT domain FROM custom_sites", conn)["domain"].tolist()
+    active_sites = [s for s in sites if st.toggle(s, value=True, key=f"live_site_{s}")]
+
+    st.divider()
+
+    st.subheader("🎯 Keywords")
+    t_list = pd.read_sql_query("SELECT name FROM targets", conn)["name"].tolist()
+    selected_targets = [t for t in t_list if st.checkbox(t, value=True, key=f"live_kw_{t}")]
+
+    st.divider()
+
+    if st.button("🚀 EXECUTE SWEEP", type="primary", width="stretch"):
+        if not google_enabled:
+            st.warning("No active search engines enabled.")
+        else:
+            st.session_state["run_sweep"] = True
+            st.session_state["sweep_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_event("SWEEP", f"targets={selected_targets} sites={active_sites}")
+
+    conn.close()
+
+    st.divider()
+
     if st.session_state.get("run_sweep"):
-        with st.status("🔎 Searching via Google…") as status:
+        with st.status("🔎 Searching…") as status:
             conn = get_db()
             total = 0
 
@@ -153,8 +174,6 @@ with t_live:
         )
 
         st.session_state["run_sweep"] = False
-    else:
-        st.info("Ready.")
 
 # ---------------- ARCHIVE ----------------
 with t_arch:
@@ -172,11 +191,13 @@ with t_arch:
 with t_jobs:
     st.header("⚙️ Jobs & Config")
 
-    st.subheader("🔍 Search Engines (SerpAPI)")
-    st.toggle("Google (site-based)", value=True)
-    st.toggle("eBay Marketplace", value=False, disabled=True, help="Planned")
-    st.toggle("Amazon Marketplace", value=False, disabled=True, help="Planned")
-    st.toggle("Etsy Marketplace", value=False, disabled=True, help="Planned")
+    st.subheader("🔍 Engine Roadmap")
+    st.markdown(
+        "- **Google (SerpAPI)** – Active\n"
+        "- **eBay (SerpAPI)** – Planned\n"
+        "- **Amazon (SerpAPI)** – Planned\n"
+        "- **Etsy (SerpAPI)** – Planned"
+    )
 
     st.divider()
 
@@ -186,14 +207,14 @@ with t_jobs:
     for s in sites_df["domain"]:
         c1, c2 = st.columns([5, 1])
         c1.write(s)
-        if c2.button("🗑️", key=f"del_site_{s}"):
+        if c2.button("🗑️", key=f"cfg_del_site_{s}"):
             conn.execute("DELETE FROM custom_sites WHERE domain = ?", (s,))
             conn.commit()
             log_event("CONFIG", f"Deleted site '{s}'")
             st.rerun()
 
-    with st.form("add_site", clear_on_submit=True):
-        ns = st.text_input("Add new site")
+    with st.form("cfg_add_site", clear_on_submit=True):
+        ns = st.text_input("Add site")
         if st.form_submit_button("Add Site") and ns:
             conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (ns,))
             conn.commit()
@@ -210,14 +231,14 @@ with t_jobs:
     for k in kw_df["name"]:
         c1, c2 = st.columns([5, 1])
         c1.write(k)
-        if c2.button("🗑️", key=f"del_kw_{k}"):
+        if c2.button("🗑️", key=f"cfg_del_kw_{k}"):
             conn.execute("DELETE FROM targets WHERE name = ?", (k,))
             conn.commit()
             log_event("CONFIG", f"Deleted keyword '{k}'")
             st.rerun()
 
-    with st.form("add_keyword", clear_on_submit=True):
-        nk = st.text_input("Add new keyword")
+    with st.form("cfg_add_kw", clear_on_submit=True):
+        nk = st.text_input("Add keyword")
         if st.form_submit_button("Add Keyword") and nk:
             conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (nk,))
             conn.commit()
