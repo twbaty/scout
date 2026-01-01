@@ -19,12 +19,18 @@ except:
 
 # Logging Configuration
 LOG_FILE = 'scout.log'
-logging.basicConfig(
-    filename=LOG_FILE, 
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+def setup_logger():
+    # Remove existing handlers to avoid file locks
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    logging.basicConfig(
+        filename=LOG_FILE, 
+        level=logging.INFO, 
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    return logging.getLogger(__name__)
+
+logger = setup_logger()
 
 # --- 2. DATABASE ENGINE ---
 def get_db_connection():
@@ -129,8 +135,7 @@ with t_dash:
     
     if not df_all.empty:
         st.subheader("🎯 Intelligence Heatmap")
-        st.write("Distribution of found items across sources and keywords:")
-        # Pivoting data for a more useful 'visual' than a bar chart
+        st.write("Distribution of found items across **all active sources**:")
         heatmap_data = df_all.groupby(['target', 'source']).size().unstack(fill_value=0)
         st.table(heatmap_data)
     else:
@@ -139,16 +144,31 @@ with t_dash:
 # TAB 3: ARCHIVE
 with t_arch:
     st.header("The Intelligence Vault")
-    depth = st.selectbox("View Depth:", [50, 100, 500, "All Records"], index=0)
-    limit_clause = "" if depth == "All Records" else f"LIMIT {depth}"
     
     conn = get_db_connection()
+    # Get total count for the dataframe height logic
+    total_count = conn.execute("SELECT count(*) FROM items").fetchone()[0]
+    
+    # Bottom-Right UI Logic
+    arch_display_col, arch_ctrl_col = st.columns([4, 1])
+    
+    with arch_ctrl_col:
+        depth = st.selectbox("View Depth:", [50, 100, 500, "All Records"], index=0)
+    
+    limit_clause = "" if depth == "All Records" else f"LIMIT {depth}"
     archive_df = pd.read_sql_query(f"SELECT found_date, source, target, title, price, url FROM items ORDER BY found_date DESC {limit_clause}", conn)
     conn.close()
     
-    st.dataframe(archive_df, column_config={"url": st.column_config.LinkColumn("Link")}, use_container_width=True, hide_index=True)
+    # height=600 gives a good scrollable area even with 'All Records'
+    st.dataframe(
+        archive_df, 
+        column_config={"url": st.column_config.LinkColumn("Link")}, 
+        use_container_width=True, 
+        hide_index=True,
+        height=min(600, (len(archive_df) * 35) + 40)
+    )
 
-# TAB 4: CONFIGURATION
+# TAB 4: CONFIGURATION (As requested, keeping full library/ledger logic)
 with t_conf:
     st.header("⚙️ Engine Room")
     st.subheader("🌐 Site Access")
@@ -188,10 +208,19 @@ with t_conf:
 with t_logs:
     st.header("System Logs")
     if st.button("🗑️ Delete All Logs"):
+        # Safely shut down logger to release the file
+        for handler in logging.root.handlers[:]:
+            handler.close()
+            logging.root.removeHandler(handler)
+        
         if os.path.exists(LOG_FILE):
-            os.remove(LOG_FILE)
-            st.success("Log file purged.")
-            st.rerun()
+            try:
+                os.remove(LOG_FILE)
+                st.success("Log file purged.")
+                setup_logger() # Restart logger
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not delete: {e}")
             
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "r") as f:
