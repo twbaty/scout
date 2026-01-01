@@ -1,6 +1,6 @@
 # ============================================================
 # SCOUT – Intelligence Terminal
-# VERSION: 3.63
+# VERSION: 3.64
 #
 # STATUS:
 # - Google Search via SerpAPI: ENABLED
@@ -81,7 +81,7 @@ def google_serpapi_dork(keyword, domain):
 
 # ---------------- SIDEBAR (EXECUTION ONLY) ----------------
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.63")
+    st.title("🛡️ SCOUT v3.64")
 
     conn = get_db()
 
@@ -147,7 +147,7 @@ with t_live:
 
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={"url": st.column_config.LinkColumn("URL")}
         )
@@ -163,7 +163,7 @@ with t_arch:
     conn.close()
     st.dataframe(
         df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={"url": st.column_config.LinkColumn("URL")}
     )
@@ -172,16 +172,14 @@ with t_arch:
 with t_jobs:
     st.header("⚙️ Jobs & Config")
 
-    # ---- Engines ----
     st.subheader("🔍 Search Engines (SerpAPI)")
-    st.toggle("Google (site-based)", value=True, disabled=False)
+    st.toggle("Google (site-based)", value=True)
     st.toggle("eBay Marketplace", value=False, disabled=True, help="Planned")
     st.toggle("Amazon Marketplace", value=False, disabled=True, help="Planned")
     st.toggle("Etsy Marketplace", value=False, disabled=True, help="Planned")
 
     st.divider()
 
-    # ---- Sites ----
     st.subheader("📡 Manage Sites")
     conn = get_db()
     sites_df = pd.read_sql_query("SELECT domain FROM custom_sites", conn)
@@ -206,7 +204,6 @@ with t_jobs:
 
     st.divider()
 
-    # ---- Keywords ----
     st.subheader("🎯 Manage Keywords")
     conn = get_db()
     kw_df = pd.read_sql_query("SELECT name FROM targets", conn)
@@ -231,7 +228,6 @@ with t_jobs:
 
     st.divider()
 
-    # ---- Scheduler ----
     st.subheader("📅 Schedule Search")
     with st.form("schedule_form"):
         jn = st.text_input("Job Name")
