@@ -1,3 +1,6 @@
+# SCOUT TERMINAL VERSION: 3.6
+# UPDATES: Advanced OS-style logging, Session-aware Custom Site Toggles, Version Headers
+
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -15,9 +18,17 @@ else:
     st.error("🔑 Missing SerpApi Key")
     st.stop()
 
-# --- 2. LOGGING & DB ---
+# --- 2. ADVANCED LOGGING & DB ---
 LOG_FILE = 'scout.log'
-logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(message)s')
+# Configure logging to behave more like a system journal
+logging.basicConfig(
+    filename=LOG_FILE, 
+    level=logging.INFO, 
+    format='%(asctime)s [SYSTEM] %(levelname)s: %(message)s'
+)
+
+def log_event(msg):
+    logging.info(msg)
 
 def get_db_connection():
     return sqlite3.connect("scout.db", check_same_thread=False)
@@ -28,6 +39,7 @@ def init_db():
     conn.execute('CREATE TABLE IF NOT EXISTS targets (name TEXT PRIMARY KEY, frequency TEXT DEFAULT "Manual", last_run TIMESTAMP)')
     conn.execute('CREATE TABLE IF NOT EXISTS custom_sites (domain TEXT PRIMARY KEY)')
     conn.commit(); conn.close()
+    log_event("Database initialized/checked.")
 
 init_db()
 
@@ -42,17 +54,19 @@ def run_scout_mission(query, engine_type, custom_domain=None):
         res_key, label = "ebay_results", "Ebay"
     elif engine_type == "custom":
         params.update({"engine": "google", "q": f"site:{custom_domain} {q}"})
-        res_key, label = "organic_results", custom_domain.split('.')[0].title()
+        res_key, label = "organic_results", custom_domain
     else: 
         search_q = f"site:etsy.com {q}" if engine_type == "etsy" else q
         params.update({"engine": "google_shopping", "q": search_q})
         res_key, label = "shopping_results", engine_type.title()
 
+    log_event(f"Requesting {label} for target '{q}'...")
+    
     try:
         r = requests.get(url, params=params, timeout=15)
         data = r.json()
         items = data.get(res_key, [])
-        logging.info(f"Sweep: {label} | Target: {q} | Hits: {len(items) if items else 0}")
+        log_event(f"SUCCESS: {label} returned {len(items)} items.")
         
         processed = []
         if isinstance(items, list):
@@ -65,7 +79,7 @@ def run_scout_mission(query, engine_type, custom_domain=None):
                 })
         return processed
     except Exception as e:
-        logging.error(f"Error on {label}: {str(e)}")
+        log_event(f"ERROR: {label} mission failed: {str(e)}")
         return []
 
 # --- 4. SIDEBAR LIBRARY ---
@@ -81,9 +95,24 @@ with st.sidebar:
                     conn = get_db_connection()
                     conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_k,))
                     conn.commit(); conn.close()
+                    log_event(f"USER ACTION: Added target '{new_k}' to library.")
                     st.rerun()
 
     st.divider()
+    
+    # CUSTOM SITE TOGGLES
+    st.subheader("📡 Deep Search Sites")
+    conn = get_db_connection()
+    customs_df = pd.read_sql_query("SELECT domain FROM custom_sites", conn)
+    conn.close()
+    
+    active_custom_sites = []
+    for s in customs_df['domain']:
+        if st.toggle(s, value=True, key=f"toggle_{s}"):
+            active_custom_sites.append(s)
+
+    st.divider()
+    st.subheader("Target Library")
     conn = get_db_connection()
     targets_list = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
     conn.close()
@@ -96,27 +125,27 @@ with st.sidebar:
             conn = get_db_connection()
             conn.execute("DELETE FROM targets WHERE name = ?", (t,))
             conn.commit(); conn.close()
+            log_event(f"USER ACTION: Deleted target '{t}'.")
             st.rerun()
     
     st.divider()
-    execute_sweep = st.button("🚀 EXECUTE SWEEP", type="primary", use_container_width=True)
+    if st.button("🚀 EXECUTE SWEEP", type="primary", use_container_width=True):
+        st.session_state['trigger_sweep'] = True
+        log_event("USER ACTION: Manual Sweep Triggered.")
 
 # --- 5. TABS ---
 t_live, t_dash, t_arch, t_conf, t_logs = st.tabs(["📡 Live Results", "📊 Dashboard", "📜 Archive", "⚙️ Config", "🛠️ Logs"])
 
 with t_live:
-    if execute_sweep and selected_targets:
+    if st.session_state.get('trigger_sweep') and selected_targets:
         hits = []
         with st.status("Gathering Intel...") as status:
-            conn = get_db_connection()
-            customs = pd.read_sql_query("SELECT domain FROM custom_sites", conn)['domain'].tolist()
-            conn.close()
-
             for target in selected_targets:
                 if st.session_state.get('p_ebay', True): hits.extend(run_scout_mission(target, "ebay"))
                 if st.session_state.get('p_etsy', True): hits.extend(run_scout_mission(target, "etsy"))
                 if st.session_state.get('p_google', True): hits.extend(run_scout_mission(target, "google"))
-                for site in customs:
+                # Run the specific custom sites toggled ON in sidebar
+                for site in active_custom_sites:
                     hits.extend(run_scout_mission(target, "custom", site))
             
             conn = get_db_connection()
@@ -125,6 +154,7 @@ with t_live:
                 except: pass
             conn.commit(); conn.close()
             st.session_state['last_run'] = hits
+            st.session_state['trigger_sweep'] = False
             status.update(label="Sweep Complete", state="complete")
 
     if 'last_run' in st.session_state:
@@ -167,23 +197,23 @@ with t_conf:
         if new_f != r['frequency']:
             conn = get_db_connection()
             conn.execute("UPDATE targets SET frequency = ? WHERE name = ?", (new_f, r['name']))
-            conn.commit(); conn.close(); st.rerun()
+            conn.commit(); conn.close()
+            log_event(f"CONFIG CHANGE: Updated {r['name']} schedule to {new_f}")
+            st.rerun()
 
     st.divider()
     st.subheader("3. Custom Domain Registration")
-    
-    # FORM WRAPPER: Ensures domain registration is captured reliably
     with st.form("custom_site_form", clear_on_submit=True):
         new_site = st.text_input("Domain (e.g. vintage-computer.com):")
-        submitted = st.form_submit_button("Register Custom Site")
-        if submitted and new_site:
+        if st.form_submit_button("Register Custom Site") and new_site:
             conn = get_db_connection()
             conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (new_site,))
             conn.commit(); conn.close()
+            log_event(f"USER ACTION: Registered custom site '{new_site}'.")
             st.toast(f"Registered {new_site}!")
             st.rerun()
 
-    st.write("#### Currently Registered Sites")
+    st.write("#### Registered Custom Sites")
     conn = get_db_connection()
     sites_df = pd.read_sql_query("SELECT domain FROM custom_sites", conn)
     conn.close()
@@ -194,12 +224,15 @@ with t_conf:
             conn = get_db_connection()
             conn.execute("DELETE FROM custom_sites WHERE domain = ?", (s,))
             conn.commit(); conn.close()
+            log_event(f"USER ACTION: Removed custom site '{s}'.")
             st.rerun()
 
 with t_logs:
-    if st.button("Clear Logs"):
+    st.subheader("System Journal")
+    if st.button("Clear Log History"):
         open(LOG_FILE, 'w').close()
+        log_event("SYSTEM: Log history cleared by user.")
         st.rerun()
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "r") as f:
-            st.code("".join(f.readlines()[-50:]))
+            st.code("".join(f.readlines()[-100:])) # Show last 100 entries
