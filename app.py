@@ -93,7 +93,7 @@ def scout_etsy(query):
 st.set_page_config(page_title="SCOUT | Intelligence Terminal", layout="wide")
 init_db()
 
-# Create Top-Level Navigation
+# Navigation Tabs
 tab_dash, tab_settings = st.tabs(["📊 Intelligence Dashboard", "⚙️ System Configuration"])
 
 with tab_settings:
@@ -102,53 +102,57 @@ with tab_settings:
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Marketplace Access")
-        st.toggle("Search eBay", value=True, key="pref_ebay")
-        st.toggle("Search Etsy", value=True, key="pref_etsy")
-        st.caption("Disabling a site here removes it from all future sweeps.")
+        # Added Google Shopping as a new source
+        use_ebay = st.toggle("Search eBay", value=True, key="pref_ebay")
+        use_etsy = st.toggle("Search Etsy", value=True, key="pref_etsy")
+        use_google = st.toggle("Search Google Shopping", value=True, key="pref_google")
+        st.caption("Toggle these to define your 'Search Perimeter'.")
 
     with col_b:
-        st.subheader("Search Depth")
+        st.subheader("Search Parameters")
         st.slider("Results per target:", 5, 50, 15, key="pref_depth")
-        st.caption("Higher depth uses more API credits.")
-
-    st.divider()
-    st.subheader("API Security")
-    with st.expander("Show API Details"):
-        st.info("Key loaded from: `.streamlit/secrets.toml`")
-        if st.button("🔄 Refresh Connection"):
-            st.success("API Bridge Reset Successfully.")
+        st.checkbox("Include 'Sold' Items (eBay only)", value=False, key="pref_sold")
 
 with tab_dash:
-    # Sidebar for Active Mission
     with st.sidebar:
         st.title("🛡️ Scout Mission")
         
-        # Add new keyword to Library
-        new_t = st.text_input("Add Keyword to Library:", placeholder="e.g. OHP Patch")
-        if st.button("➕ Add"):
-            if new_t:
-                conn = get_db_connection()
-                conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_t,))
-                conn.commit()
-                conn.close()
-                st.rerun()
+        # LIBRARY MANAGEMENT
+        with st.expander("📚 Manage Library", expanded=True):
+            new_t = st.text_input("New Keyword:", placeholder="e.g. OHP Patch")
+            if st.button("➕ Add to Library", use_container_width=True):
+                if new_t:
+                    conn = get_db_connection()
+                    conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_t,))
+                    conn.commit(); conn.close()
+                    st.rerun()
+            
+            # THE DELETE BUTTON (Restored)
+            st.write("---")
+            conn = get_db_connection()
+            all_targets = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
+            conn.close()
+            
+            target_to_del = st.selectbox("Remove from Library:", ["-- Select --"] + all_targets)
+            if st.button("🗑️ Delete Keyword", use_container_width=True, type="secondary"):
+                if target_to_del != "-- Select --":
+                    conn = get_db_connection()
+                    conn.execute("DELETE FROM targets WHERE name = ?", (target_to_del,))
+                    conn.commit(); conn.close()
+                    st.rerun()
 
         st.divider()
         
-        # Load Library
-        conn = get_db_connection()
-        all_targets = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
-        conn.close()
-        
-        st.write("Select Targets for this Sweep:")
+        # ACTIVE SELECTION
+        st.write("Active for this Sweep:")
         selected = []
         for t in all_targets:
             if st.checkbox(t, value=True, key=f"active_{t}"):
                 selected.append(t)
         
         st.divider()
-        run_mission = st.button("🚀 EXECUTE SWEEP", use_container_width=True)
-
+        run_mission = st.button("🚀 EXECUTE SWEEP", use_container_width=True, type="primary")
+        
     # Main Dashboard Logic
     st.title("Intelligence Dashboard")
     
