@@ -99,7 +99,7 @@ with st.sidebar:
             if st.toggle(s, value=True, key=f"sb_site_{s}")
         ]
 
-      st.subheader("🎯 Keywords")
+    st.subheader("🎯 Keywords")
 
     with st.container(height=210, border=True):
         # Quick add keyword (ad-hoc convenience)
