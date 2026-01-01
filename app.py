@@ -1,5 +1,5 @@
-# SCOUT TERMINAL VERSION: 3.46
-# UPDATES: Final code consolidation. No structural changes. Verified all forms.
+# SCOUT TERMINAL VERSION: 3.47
+# UPDATES: Fixed SyntaxError (unterminated string), Verified Job Scheduler logic.
 
 import streamlit as st
 import pandas as pd
@@ -8,7 +8,7 @@ import os
 import time
 import logging
 
-# --- [1. CORE SYSTEM] ---
+# --- [1. SYSTEM CORE] ---
 st.set_page_config(page_title="SCOUT | Intelligence Terminal", layout="wide")
 LOG_FILE = 'scout.log'
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,7 +21,7 @@ def get_db():
 
 # --- [2. SIDEBAR (L)] ---
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.46")
+    st.title("🛡️ SCOUT v3.47")
     
     conn = get_db()
     
@@ -34,7 +34,7 @@ with st.sidebar:
 
     # KEYWORD LIBRARY
     with st.expander("🎯 Keyword Library", expanded=True):
-        with st.form("add_keyword_v46", clear_on_submit=True):
+        with st.form("add_keyword_v47", clear_on_submit=True):
             nk = st.text_input("New Target:")
             if st.form_submit_button("＋", width="stretch"):
                 if nk:
@@ -63,7 +63,6 @@ with st.sidebar:
 # --- [3. MAIN INTERFACE] ---
 t_live, t_arch, t_jobs, t_logs = st.tabs(["📡 Live Feed", "📜 Archive", "⚙️ Jobs & Config", "📝 Logs"])
 
-# TAB: LIVE FEED
 with t_live:
     c_main, c_stat = st.columns([3, 1])
     with c_main:
@@ -81,19 +80,19 @@ with t_live:
                 status.update(label=f"Sweep Complete: {len(results)} items identified.", state="complete")
             
             if not results.empty:
-                st.subheader(f"Results for Keywords: {', '.join(selected_targets)}")
+                st.subheader("Current Results")
                 st.dataframe(results, use_container_width=True, hide_index=True)
             else:
                 st.warning("No matches found in database for selected keywords.")
             st.session_state['run_sweep'] = False
         else:
-            st.info("Terminal Ready. Select keywords and execute.")
+            st.info("Terminal Ready.")
 
     with c_stat:
         st.subheader("Global Engines")
-        st.toggle("eBay", value=True, key="eb_v46")
-        st.toggle("Etsy", value=True, key="et_v46")
-        st.toggle("Google", value=True, key="go_v46")
+        st.toggle("eBay", value=True, key="eb_v47")
+        st.toggle("Etsy", value=True, key="et_v47")
+        st.toggle("Google", value=True, key="go_v47")
         st.divider()
         st.subheader("📡 Status")
         if os.path.exists(LOG_FILE):
@@ -101,7 +100,6 @@ with t_live:
                 lines = f.readlines()
                 st.code(lines[-1] if lines else "Ready.")
 
-# TAB: ARCHIVE
 with t_arch:
     st.subheader("📜 Historical Findings")
     conn = get_db()
@@ -109,13 +107,12 @@ with t_arch:
     conn.close()
     st.dataframe(all_items, use_container_width=True, hide_index=True)
 
-# TAB: JOBS & CONFIG
 with t_jobs:
     st.header("⚙️ Jobs & Config")
     
     # 1. ADD SITES
     st.subheader("📡 Register New Deep Search Site")
-    with st.form("add_site_v46", clear_on_submit=True):
+    with st.form("add_site_v47", clear_on_submit=True):
         ns = st.text_input("Domain (e.g. newegg.com)")
         if st.form_submit_button("Add Site"):
             if ns:
@@ -132,9 +129,9 @@ with t_jobs:
         conn = get_db()
         sites = pd.read_sql_query("SELECT domain FROM custom_sites", conn)
         for s in sites['domain']:
-            c1, c2 = st.columns([5, 1])
-            c1.write(f"🌐 {s}")
-            if c2.button("🗑️", key=f"rm_site_{s}"):
+            sc1, sc2 = st.columns([5, 1])
+            sc1.write(f"🌐 {s}")
+            if sc2.button("🗑️", key=f"rm_site_{s}"):
                 conn.execute("DELETE FROM custom_sites WHERE domain = ?", (s,))
                 conn.commit(); conn.close()
                 log_event("BUTTON", f"SUCCESS: Removed Site '{s}'")
@@ -143,13 +140,23 @@ with t_jobs:
 
     st.divider()
 
-    # 3. SCHEDULER
+    # 3. SCHEDULER (FIXED SYNTAX)
     st.subheader("📅 Schedule Search")
-    with st.form("job_form_v46"):
+    with st.form("job_form_v47"):
         jn = st.text_input("Job Name")
         jt = st.multiselect("Keywords", t_list)
         jf = st.selectbox("Frequency", ["6 Hours", "12 Hours", "Daily"])
         if st.form_submit_button("Save Job"):
             if jn and jt:
                 conn = get_db()
-                conn.execute("INSERT INTO schedules (job_name, frequency
+                conn.execute("INSERT INTO schedules (job_name, frequency, target_list) VALUES (?,?,?)", (jn, jf, ",".join(jt)))
+                conn.commit()
+                conn.close()
+                log_event("BUTTON", f"SUCCESS: Saved Job '{jn}'")
+                st.rerun()
+
+with t_logs:
+    st.subheader("🛠️ System Logs")
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+            st.code("".join(f.readlines()[-100:]))
