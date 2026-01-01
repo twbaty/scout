@@ -38,33 +38,50 @@ def init_db():
 def scrape_ebay(query):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "max-age=0",
     }
-    # _sop=10 sorts by 'Newly Listed'
+    # Standard search URL
     url = f"https://www.ebay.com/sch/i.html?_nkw={query.replace(' ', '+')}&_sop=10"
     logger.info(f"Scouting eBay: {query}")
+    
     try:
         resp = requests.get(url, headers=headers, timeout=10)
-        logger.info(f"eBay Response Code: {resp.status_code}")
         soup = BeautifulSoup(resp.text, "html.parser")
-        listings = soup.select('.s-item__info')
+        
+        # We search for the three most common listing containers used in 2025
+        listings = soup.select('.s-item__info') or soup.select('.srp-results .s-item')
+        
         results = []
         for i in listings:
-            title = i.select_one('.s-item__title')
+            # eBay 2025 uses nested spans or specific 'header' tags for titles now
+            title = i.select_one('.s-item__title span[role="heading"]') or \
+                    i.select_one('.s-item__title') or \
+                    i.select_one('h3.s-item__title')
+            
             price = i.select_one('.s-item__price')
             link = i.select_one('.s-item__link')
-            # Filter out the "Shop on eBay" header and empty results
-            if title and price and link and "Shop on eBay" not in title.text:
+            
+            if title and price and link:
+                clean_title = title.text.replace("New Listing", "").strip()
+                # Skip the "Shop on eBay" result and empty headers
+                if "Shop on eBay" in clean_title or not clean_title:
+                    continue
+                    
                 results.append({
-                    "target": query, "source": "eBay", 
-                    "title": title.text.replace("New Listing", "").strip(), 
-                    "price": price.text.strip(), "url": link['href'].split('?')[0]
+                    "target": query, 
+                    "source": "eBay", 
+                    "title": clean_title, 
+                    "price": price.text.strip(), 
+                    "url": link['href'].split('?')[0]
                 })
-        logger.info(f"eBay returned {len(results)} items.")
+        
+        logger.info(f"eBay returned {len(results)} items after wide-net search.")
         return results[:10]
     except Exception as e:
         logger.error(f"eBay Error: {e}")
         return []
+        
 
 def scrape_etsy(query):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
