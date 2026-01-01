@@ -1,5 +1,5 @@
-# SCOUT TERMINAL VERSION: 3.6
-# UPDATES: Advanced OS-style logging, Session-aware Custom Site Toggles, Version Headers
+# SCOUT TERMINAL VERSION: 3.7
+# UPDATES: Direct URL Peeling, Button Telemetry, OS-Style Logging
 
 import streamlit as st
 import pandas as pd
@@ -18,16 +18,17 @@ else:
     st.error("🔑 Missing SerpApi Key")
     st.stop()
 
-# --- 2. ADVANCED LOGGING & DB ---
+# --- 2. OS-LEVEL LOGGING ---
 LOG_FILE = 'scout.log'
-# Configure logging to behave more like a system journal
 logging.basicConfig(
     filename=LOG_FILE, 
     level=logging.INFO, 
-    format='%(asctime)s [SYSTEM] %(levelname)s: %(message)s'
+    format='%(asctime)s [OS_LEVEL] %(levelname)s: %(message)s'
 )
 
-def log_event(msg):
+def log_system(event_type, details):
+    """Logs every button press and state change for troubleshooting."""
+    msg = f"[{event_type.upper()}] {details}"
     logging.info(msg)
 
 def get_db_connection():
@@ -39,11 +40,11 @@ def init_db():
     conn.execute('CREATE TABLE IF NOT EXISTS targets (name TEXT PRIMARY KEY, frequency TEXT DEFAULT "Manual", last_run TIMESTAMP)')
     conn.execute('CREATE TABLE IF NOT EXISTS custom_sites (domain TEXT PRIMARY KEY)')
     conn.commit(); conn.close()
-    log_event("Database initialized/checked.")
+    log_system("init", "Database schema verified.")
 
 init_db()
 
-# --- 3. THE UNIVERSAL ENGINE ---
+# --- 3. THE ENGINE (LINK PEELING ENABLED) ---
 def run_scout_mission(query, engine_type, custom_domain=None):
     url = "https://serpapi.com/search.json"
     q = str(query).strip()
@@ -60,47 +61,40 @@ def run_scout_mission(query, engine_type, custom_domain=None):
         params.update({"engine": "google_shopping", "q": search_q})
         res_key, label = "shopping_results", engine_type.title()
 
-    log_event(f"Requesting {label} for target '{q}'...")
+    log_system("request", f"Launching mission for {label} -> {q}")
     
     try:
         r = requests.get(url, params=params, timeout=15)
         data = r.json()
         items = data.get(res_key, [])
-        log_event(f"SUCCESS: {label} returned {len(items)} items.")
+        log_system("response", f"{label} returned {len(items)} results (Status: {r.status_code})")
         
         processed = []
         if isinstance(items, list):
             for i in items[:15]:
+                # LINK PEELING: Prioritize direct merchant links over Google redirects
+                direct_url = i.get("link", i.get("product_link", "#"))
+                if "google.com/url" in direct_url and "url=" in direct_url:
+                    # Attempt to extract the actual site from the Google redirect string
+                    direct_url = direct_url.split("url=")[-1].split("&")[0]
+                
                 p = i.get("price")
                 p_val = p.get("raw", "N/A") if isinstance(p, dict) else str(p or "N/A")
+                
                 processed.append({
                     "target": q, "source": label, "title": i.get("title", i.get("name", "No Title")),
-                    "price": p_val, "url": i.get("link", "#")
+                    "price": p_val, "url": direct_url
                 })
         return processed
     except Exception as e:
-        log_event(f"ERROR: {label} mission failed: {str(e)}")
+        log_system("error", f"Mission failure on {label}: {str(e)}")
         return []
 
-# --- 4. SIDEBAR LIBRARY ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
-    st.title("🛡️ SCOUT")
+    st.title("🛡️ SCOUT v3.7")
     
-    # Keyword Registration
-    with st.expander("➕ Register Target", expanded=False):
-        with st.form("target_form", clear_on_submit=True):
-            new_k = st.text_input("Keyword:")
-            if st.form_submit_button("Add to Library"):
-                if new_k:
-                    conn = get_db_connection()
-                    conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_k,))
-                    conn.commit(); conn.close()
-                    log_event(f"USER ACTION: Added target '{new_k}' to library.")
-                    st.rerun()
-
-    st.divider()
-    
-    # CUSTOM SITE TOGGLES
+    # Custom Site Toggles (Requested: On/Off control for deep sites)
     st.subheader("📡 Deep Search Sites")
     conn = get_db_connection()
     customs_df = pd.read_sql_query("SELECT domain FROM custom_sites", conn)
@@ -108,131 +102,94 @@ with st.sidebar:
     
     active_custom_sites = []
     for s in customs_df['domain']:
-        if st.toggle(s, value=True, key=f"toggle_{s}"):
+        if st.toggle(s, value=True, key=f"tgl_{s}"):
             active_custom_sites.append(s)
 
     st.divider()
-    st.subheader("Target Library")
-    conn = get_db_connection()
-    targets_list = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
-    conn.close()
-    
-    selected_targets = []
-    for t in targets_list:
-        c1, c2 = st.columns([4, 1])
-        if c1.checkbox(t, value=True, key=f"cb_{t}"): selected_targets.append(t)
-        if c2.button("🗑️", key=f"del_{t}"):
-            conn = get_db_connection()
-            conn.execute("DELETE FROM targets WHERE name = ?", (t,))
-            conn.commit(); conn.close()
-            log_event(f"USER ACTION: Deleted target '{t}'.")
-            st.rerun()
-    
+    with st.expander("🎯 Target Library", expanded=True):
+        with st.form("sidebar_target_form", clear_on_submit=True):
+            new_target = st.text_input("New Keyword:")
+            if st.form_submit_button("Add"):
+                if new_target:
+                    conn = get_db_connection()
+                    conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_target,))
+                    conn.commit(); conn.close()
+                    log_system("button_click", f"Added target: {new_target}")
+                    st.rerun()
+
+        conn = get_db_connection()
+        t_list = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
+        conn.close()
+        
+        selected_targets = []
+        for t in t_list:
+            c1, c2 = st.columns([4, 1])
+            if c1.checkbox(t, value=True, key=f"sel_{t}"): selected_targets.append(t)
+            if c2.button("🗑️", key=f"rm_{t}"):
+                conn = get_db_connection()
+                conn.execute("DELETE FROM targets WHERE name = ?", (t,))
+                conn.commit(); conn.close()
+                log_system("button_click", f"Deleted target: {t}")
+                st.rerun()
+
     st.divider()
     if st.button("🚀 EXECUTE SWEEP", type="primary", use_container_width=True):
-        st.session_state['trigger_sweep'] = True
-        log_event("USER ACTION: Manual Sweep Triggered.")
+        st.session_state['run_sweep'] = True
+        log_system("button_click", "Manual Sweep Executed.")
 
 # --- 5. TABS ---
-t_live, t_dash, t_arch, t_conf, t_logs = st.tabs(["📡 Live Results", "📊 Dashboard", "📜 Archive", "⚙️ Config", "🛠️ Logs"])
+t_live, t_dash, t_arch, t_conf, t_logs = st.tabs(["📡 Live", "📊 Stats", "📜 Archive", "⚙️ Config", "🛠️ Logs"])
 
 with t_live:
-    if st.session_state.get('trigger_sweep') and selected_targets:
-        hits = []
-        with st.status("Gathering Intel...") as status:
+    if st.session_state.get('run_sweep') and selected_targets:
+        all_hits = []
+        with st.status("Executing Scans...") as status:
             for target in selected_targets:
-                if st.session_state.get('p_ebay', True): hits.extend(run_scout_mission(target, "ebay"))
-                if st.session_state.get('p_etsy', True): hits.extend(run_scout_mission(target, "etsy"))
-                if st.session_state.get('p_google', True): hits.extend(run_scout_mission(target, "google"))
-                # Run the specific custom sites toggled ON in sidebar
+                if st.session_state.get('p_ebay', True): all_hits.extend(run_scout_mission(target, "ebay"))
+                if st.session_state.get('p_etsy', True): all_hits.extend(run_scout_mission(target, "etsy"))
+                if st.session_state.get('p_google', True): all_hits.extend(run_scout_mission(target, "google"))
                 for site in active_custom_sites:
-                    hits.extend(run_scout_mission(target, "custom", site))
+                    all_hits.extend(run_scout_mission(target, "custom", site))
             
             conn = get_db_connection()
-            for h in hits:
+            for h in all_hits:
                 try: conn.execute("INSERT INTO items (target, source, title, price, url) VALUES (?,?,?,?,?)", (h['target'], h['source'], h['title'], h['price'], h['url']))
                 except: pass
             conn.commit(); conn.close()
-            st.session_state['last_run'] = hits
-            st.session_state['trigger_sweep'] = False
-            status.update(label="Sweep Complete", state="complete")
+            st.session_state['last_data'] = all_hits
+            st.session_state['run_sweep'] = False
+            status.update(label="Scanning Complete", state="complete")
 
-    if 'last_run' in st.session_state:
-        st.dataframe(pd.DataFrame(st.session_state['last_run']), 
-                     column_config={"url": st.column_config.LinkColumn("Link", display_text="Open")},
+    if 'last_data' in st.session_state:
+        st.dataframe(pd.DataFrame(st.session_state['last_data']), 
+                     column_config={"url": st.column_config.LinkColumn("Link", display_text="Open Item")},
                      use_container_width=True, hide_index=True)
 
-with t_dash:
-    conn = get_db_connection()
-    df = pd.read_sql_query("SELECT source, target FROM items", conn)
-    conn.close()
-    if not df.empty:
-        st.table(df.groupby(['target', 'source']).size().unstack(fill_value=0))
-
-with t_arch:
-    conn = get_db_connection()
-    df_arch = pd.read_sql_query("SELECT * FROM items ORDER BY found_date DESC LIMIT 100", conn)
-    conn.close()
-    st.dataframe(df_arch, column_config={"url": st.column_config.LinkColumn("Link")}, use_container_width=True, hide_index=True)
-
 with t_conf:
-    st.subheader("1. Marketplace Toggles")
+    st.subheader("Global Marketplace Toggles")
     c1, c2, c3 = st.columns(3)
     c1.toggle("Ebay", value=True, key="p_ebay")
     c2.toggle("Etsy", value=True, key="p_etsy")
     c3.toggle("Google Shopping", value=True, key="p_google")
     
     st.divider()
-    st.subheader("2. Target Scheduling")
-    conn = get_db_connection()
-    s_df = pd.read_sql_query("SELECT * FROM targets", conn)
-    conn.close()
-    
-    sched_opts = ["Manual", "Daily", "M-W-F", "Weekly", "Bi-Weekly"]
-    for _, r in s_df.iterrows():
-        sc1, sc2 = st.columns([3, 2])
-        sc1.write(r['name'])
-        curr = r['frequency'] if r['frequency'] in sched_opts else "Manual"
-        new_f = sc2.selectbox("Schedule", sched_opts, index=sched_opts.index(curr), key=f"f_{r['name']}")
-        if new_f != r['frequency']:
-            conn = get_db_connection()
-            conn.execute("UPDATE targets SET frequency = ? WHERE name = ?", (new_f, r['name']))
-            conn.commit(); conn.close()
-            log_event(f"CONFIG CHANGE: Updated {r['name']} schedule to {new_f}")
-            st.rerun()
-
-    st.divider()
-    st.subheader("3. Custom Domain Registration")
-    with st.form("custom_site_form", clear_on_submit=True):
-        new_site = st.text_input("Domain (e.g. vintage-computer.com):")
-        if st.form_submit_button("Register Custom Site") and new_site:
-            conn = get_db_connection()
-            conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (new_site,))
-            conn.commit(); conn.close()
-            log_event(f"USER ACTION: Registered custom site '{new_site}'.")
-            st.toast(f"Registered {new_site}!")
-            st.rerun()
-
-    st.write("#### Registered Custom Sites")
-    conn = get_db_connection()
-    sites_df = pd.read_sql_query("SELECT domain FROM custom_sites", conn)
-    conn.close()
-    for s in sites_df['domain']:
-        c_site, c_del = st.columns([5, 1])
-        c_site.code(s)
-        if c_del.button("🗑️", key=f"del_site_{s}"):
-            conn = get_db_connection()
-            conn.execute("DELETE FROM custom_sites WHERE domain = ?", (s,))
-            conn.commit(); conn.close()
-            log_event(f"USER ACTION: Removed custom site '{s}'.")
-            st.rerun()
+    st.subheader("Custom Site Registration")
+    with st.form("conf_site_form", clear_on_submit=True):
+        site_in = st.text_input("Domain (e.g. vintage-computer.com):")
+        if st.form_submit_button("Register"):
+            if site_in:
+                conn = get_db_connection()
+                conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (site_in,))
+                conn.commit(); conn.close()
+                log_system("button_click", f"Registered site: {site_in}")
+                st.rerun()
 
 with t_logs:
-    st.subheader("System Journal")
-    if st.button("Clear Log History"):
+    st.subheader("Telemetry & System Journal")
+    if st.button("Wipe Logs"):
         open(LOG_FILE, 'w').close()
-        log_event("SYSTEM: Log history cleared by user.")
+        log_system("system", "Log history wiped.")
         st.rerun()
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "r") as f:
-            st.code("".join(f.readlines()[-100:])) # Show last 100 entries
+            st.code("".join(f.readlines()[-100:]))
