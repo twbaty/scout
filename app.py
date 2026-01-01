@@ -12,7 +12,7 @@ st.markdown("""
     .main { background-color: #0e1117; }
     .stMetric { background-color: #161b22; border-radius: 10px; padding: 15px; border: 1px solid #30363d; }
     </style>
-    """, unsafe_base_config=True)
+    """, unsafe_allow_html=True)
 
 # --- DATABASE LOGIC ---
 def get_stats():
