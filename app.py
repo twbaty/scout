@@ -1,5 +1,5 @@
-# SCOUT TERMINAL VERSION: 3.37
-# UPDATES: Fixed st.markdown HTML syntax, Absolute Modular Independence
+# SCOUT TERMINAL VERSION: 3.38
+# UPDATES: Restored Site Addition Form, Fixed Sidebar Layout, Standardized Logging
 
 import streamlit as st
 import pandas as pd
@@ -8,7 +8,7 @@ import os
 import time
 import logging
 
-# --- [1. SYSTEM CORE] ---
+# --- [1. CORE SYSTEM & LOGGING] ---
 st.set_page_config(page_title="SCOUT | Intelligence Terminal", layout="wide")
 LOG_FILE = 'scout.log'
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,7 +21,7 @@ def get_db():
 
 # --- [2. SIDEBAR LAYOUT] ---
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.37")
+    st.title("🛡️ SCOUT v3.38")
     
     # Custom Site Toggles
     st.subheader("📡 Deep Search Sites")
@@ -40,7 +40,7 @@ with st.sidebar:
                 if nt:
                     conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (nt,))
                     conn.commit()
-                    log_event("BUTTON", f"SUCCESS: Added Target '{nt}'")
+                    log_event("BUTTON", f"SUCCESS: Added Target '{nt}' to Library")
                     st.rerun()
         
         t_list = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
@@ -50,10 +50,10 @@ with st.sidebar:
             if c2.button("🗑️", key=f"sidebar_del_{t}"):
                 conn.execute("DELETE FROM targets WHERE name = ?", (t,))
                 conn.commit()
-                log_event("BUTTON", f"SUCCESS: Deleted Target '{t}'")
+                log_event("BUTTON", f"SUCCESS: Deleted Target '{t}' from Library")
                 st.rerun()
 
-    # FIXED: Corrected HTML spacer syntax for Streamlit 2026
+    # Layout Spacer
     st.markdown("<br>" * 10, unsafe_allow_html=True)
     
     if st.button("🚀 EXECUTE SWEEP", type="primary", width="stretch"):
@@ -89,7 +89,6 @@ with t_live:
 with t_arch:
     st.subheader("📜 Historical Findings")
     conn = get_db()
-    # Independent query prevents cross-tab breakage
     arch_df = pd.read_sql_query("SELECT found_date, target, source, title, price, url FROM items ORDER BY found_date DESC", conn)
     conn.close()
     if not arch_df.empty:
@@ -99,7 +98,8 @@ with t_arch:
 
 with t_jobs:
     st.header("⚙️ Jobs & Config")
-    # Scheduler
+    
+    # PART A: SCHEDULER
     st.subheader("📅 Schedule Search")
     with st.form("job_scheduler"):
         jn = st.text_input("Job Name")
@@ -114,19 +114,34 @@ with t_jobs:
                 st.rerun()
 
     st.divider()
-    # Manage Sites (Delete logic)
-    st.subheader("📡 Manage Sites")
-    conn = get_db()
-    sites = pd.read_sql_query("SELECT domain FROM custom_sites", conn)
-    for s in sites['domain']:
-        sc1, sc2 = st.columns([5, 1])
-        sc1.write(f"🌐 {s}")
-        if sc2.button("🗑️", key=f"rm_site_{s}"):
-            conn.execute("DELETE FROM custom_sites WHERE domain = ?", (s,))
-            conn.commit(); conn.close()
-            log_event("BUTTON", f"SUCCESS: Removed Site '{s}'")
-            st.rerun()
-    conn.close()
+
+    # PART B: SITE MANAGEMENT (RESTORED ADD FORM)
+    st.subheader("📡 Manage Deep Search Sites")
+    
+    # 1. Add New Site
+    with st.form("add_site_v38", clear_on_submit=True):
+        ns = st.text_input("Add New Domain (e.g., vintage-computer.com):")
+        if st.form_submit_button("Add Site", width="stretch"):
+            if ns:
+                conn = get_db()
+                conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (ns,))
+                conn.commit(); conn.close()
+                log_event("BUTTON", f"SUCCESS: Added New Site '{ns}'")
+                st.rerun()
+
+    # 2. View/Delete Existing
+    with st.expander("View / Delete Registered Sites"):
+        conn = get_db()
+        sites = pd.read_sql_query("SELECT domain FROM custom_sites", conn)
+        for s in sites['domain']:
+            sc1, sc2 = st.columns([5, 1])
+            sc1.write(f"🌐 {s}")
+            if sc2.button("🗑️", key=f"rm_site_{s}"):
+                conn.execute("DELETE FROM custom_sites WHERE domain = ?", (s,))
+                conn.commit(); conn.close()
+                log_event("BUTTON", f"SUCCESS: Removed Site '{s}'")
+                st.rerun()
+        conn.close()
 
 with t_logs:
     st.subheader("🛠️ System Logs")
