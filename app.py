@@ -77,6 +77,6 @@ with tab2:
     conn.close()
     
     st.dataframe(history_df, 
-                 column_config={"Link": st.column_config.Link_Column("View Listing")},
+                 column_config={"Link": st.column_config.LinkColumn("View Listing")},
                  use_container_width=True, 
                  hide_index=True)
