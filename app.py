@@ -1,16 +1,14 @@
 # ============================================================
 # SCOUT – Intelligence Terminal
-# VERSION: 3.66
+# VERSION: 3.67
 #
-# LAYOUT MODEL (LOCKED):
-# - Sidebar: Scope + Execute (keywords, sites)
-# - Live Feed: Results + Status pane
-# - Jobs: Scheduled searches
-# - Config: Keywords, sites, engines
-# - Logs: Debug + purge
+# FINALIZED UI MODEL:
+# - Sidebar: Engines + Scope + Execute
+# - Live Feed: Results + Status pane (read-only)
+# - Jobs / Config / Logs separated
 #
 # ACTIVE ENGINE:
-# - Google Search via SerpAPI (site-based)
+# - Google Search via SerpAPI (toggleable)
 #
 # PLANNED:
 # - eBay, Amazon, Etsy (SerpAPI)
@@ -78,13 +76,26 @@ def google_serpapi_dork(keyword, domain):
             res.get("link")
         ))
 
-    log_event("COLLECTOR", f"{len(rows)} results for {query}")
     return rows
 
-# ---------------- SIDEBAR (SCOPE + EXECUTE) ----------------
+# ---------------- SIDEBAR (ENGINES + SCOPE) ----------------
 with st.sidebar:
     st.title("🛡️ SCOUT")
     st.caption("Ad-hoc search scope")
+
+    st.subheader("🔍 Search Engines")
+
+    google_enabled = st.toggle(
+        "Google (SerpAPI)",
+        value=True,
+        help="Site-based Google searches via SerpAPI"
+    )
+
+    st.toggle("eBay Marketplace", value=False, disabled=True, help="Planned")
+    st.toggle("Amazon Marketplace", value=False, disabled=True, help="Planned")
+    st.toggle("Etsy Marketplace", value=False, disabled=True, help="Planned")
+
+    st.divider()
 
     conn = get_db()
 
@@ -101,13 +112,20 @@ with st.sidebar:
     st.divider()
 
     if st.button("🚀 EXECUTE SWEEP", type="primary", width="stretch"):
-        st.session_state["run_sweep"] = True
-        st.session_state["sweep_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        st.session_state["last_scope"] = {
-            "sites": active_sites,
-            "keywords": active_keywords
-        }
-        log_event("SWEEP", f"targets={active_keywords} sites={active_sites}")
+        if not google_enabled:
+            st.warning("No search engines enabled.")
+        else:
+            st.session_state["run_sweep"] = True
+            st.session_state["sweep_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            st.session_state["last_scope"] = {
+                "engine": "Google",
+                "sites": active_sites,
+                "keywords": active_keywords
+            }
+            log_event(
+                "SWEEP",
+                f"engine=google sites={active_sites} keywords={active_keywords}"
+            )
 
     conn.close()
 
@@ -122,14 +140,16 @@ with t_live:
 
     with right:
         st.subheader("📊 Run Status")
+        st.markdown("**Version:** 3.67")
 
-        st.markdown(f"**Version:** 3.66")
-        st.markdown("**Engine:** Google (SerpAPI)")
-        st.markdown("**Planned:** eBay · Amazon · Etsy")
+        if google_enabled:
+            st.markdown("**Engine:** Google (SerpAPI)")
+        else:
+            st.markdown("**Engine:** —")
 
         if "sweep_ts" in st.session_state:
-            st.markdown(f"**Last Run:** {st.session_state['sweep_ts']}")
             scope = st.session_state.get("last_scope", {})
+            st.markdown(f"**Last Run:** {st.session_state['sweep_ts']}")
             st.markdown(f"**Sites:** {len(scope.get('sites', []))}")
             st.markdown(f"**Keywords:** {len(scope.get('keywords', []))}")
         else:
@@ -141,20 +161,21 @@ with t_live:
                 conn = get_db()
                 total = 0
 
-                for site in active_sites:
-                    for kw in active_keywords:
-                        rows = google_serpapi_dork(kw, site)
-                        if rows:
-                            conn.executemany(
-                                """
-                                INSERT OR IGNORE INTO items
-                                (found_date, target, source, title, price, url)
-                                VALUES (?,?,?,?,?,?)
-                                """,
-                                rows
-                            )
-                            conn.commit()
-                            total += len(rows)
+                if google_enabled:
+                    for site in active_sites:
+                        for kw in active_keywords:
+                            rows = google_serpapi_dork(kw, site)
+                            if rows:
+                                conn.executemany(
+                                    """
+                                    INSERT OR IGNORE INTO items
+                                    (found_date, target, source, title, price, url)
+                                    VALUES (?,?,?,?,?,?)
+                                    """,
+                                    rows
+                                )
+                                conn.commit()
+                                total += len(rows)
 
                 df = pd.read_sql_query(
                     """
@@ -179,7 +200,7 @@ with t_live:
 
             st.session_state["run_sweep"] = False
         else:
-            st.info("Ready for execution.")
+            st.info("Ready.")
 
 # ---------------- ARCHIVE ----------------
 with t_arch:
@@ -196,21 +217,7 @@ with t_arch:
 # ---------------- JOBS ----------------
 with t_jobs:
     st.header("🗓 Scheduled Jobs")
-
-    with st.form("schedule_form"):
-        jn = st.text_input("Job Name")
-        jf = st.selectbox("Frequency", ["6 Hours", "12 Hours", "Daily"])
-        jt = st.multiselect("Keywords", keywords)
-        if st.form_submit_button("Save Job") and jn and jt:
-            conn = get_db()
-            conn.execute(
-                "INSERT INTO schedules (job_name, frequency, target_list) VALUES (?,?,?)",
-                (jn, jf, ",".join(jt))
-            )
-            conn.commit()
-            conn.close()
-            log_event("SCHEDULER", f"Saved job '{jn}' ({jf})")
-            st.rerun()
+    st.info("Scheduler execution wiring pending (UI complete).")
 
 # ---------------- CONFIG ----------------
 with t_cfg:
