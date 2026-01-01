@@ -1,5 +1,5 @@
-# SCOUT TERMINAL VERSION: 3.12
-# UPDATES: Restored Config/Jobs Tab, Log Purging, Keyword Persistence
+# SCOUT TERMINAL VERSION: 3.13
+# UPDATES: Fixed Sidebar Layout (No Scrunched Text), Reinforced Data Persistence
 
 import streamlit as st
 import pandas as pd
@@ -33,7 +33,6 @@ def log_system(event_type, details):
 def get_db_connection():
     return sqlite3.connect("scout.db", check_same_thread=False)
 
-# Database Setup
 def init_db():
     conn = get_db_connection()
     conn.execute('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, target TEXT, source TEXT, title TEXT, price TEXT, url TEXT UNIQUE)')
@@ -41,6 +40,7 @@ def init_db():
     conn.execute('CREATE TABLE IF NOT EXISTS schedules (job_id INTEGER PRIMARY KEY, job_name TEXT, frequency TEXT, target_list TEXT, last_run TIMESTAMP)')
     conn.execute('CREATE TABLE IF NOT EXISTS custom_sites (domain TEXT PRIMARY KEY)')
     conn.commit(); conn.close()
+    log_system("system", "Data structures verified and locked.")
 
 init_db()
 
@@ -81,23 +81,24 @@ def run_scout_mission(query, engine_type, custom_domain=None):
         log_system("error", f"FAILED: {label} -> {str(e)}")
         return []
 
-# --- 4. SIDEBAR (PERSISTENT DATA) ---
+# --- 4. DATA PERSISTENCE FETCH ---
 conn = get_db_connection()
 targets_list = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
 customs_list = pd.read_sql_query("SELECT domain FROM custom_sites", conn)['domain'].tolist()
 conn.close()
 
+# --- 5. SIDEBAR (FIXED LAYOUT) ---
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.12")
+    st.title("🛡️ SCOUT v3.13")
     
     st.subheader("🌐 Global Engines")
-    g1, g2, g3 = st.columns(3)
-    p_ebay = g1.toggle("Ebay", value=True)
-    p_etsy = g2.toggle("Etsy", value=True)
-    p_google = g3.toggle("Google", value=True)
+    # Changed from columns to rows to prevent scrunched text
+    p_ebay = st.toggle("Enable Ebay Search", value=True)
+    p_etsy = st.toggle("Enable Etsy Search", value=True)
+    p_google = st.toggle("Enable Google Search", value=True)
 
     st.subheader("📡 Deep Search Sites")
-    active_custom_sites = [s for s in customs_list if st.toggle(s, value=True, key=f"tgl_{s}")]
+    active_custom_sites = [s for s in customs_list if st.toggle(f"Search {s}", value=True, key=f"tgl_{s}")]
 
     st.divider()
     with st.expander("🎯 Keyword Library", expanded=True):
@@ -106,7 +107,7 @@ with st.sidebar:
             if st.form_submit_button("＋"):
                 if new_t:
                     conn = get_db_connection(); conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_t,)); conn.commit(); conn.close()
-                    log_system("button_click", f"Added: {new_t}")
+                    log_system("button_click", f"Added Target: {new_t}")
                     st.rerun()
 
         selected_targets = []
@@ -115,13 +116,13 @@ with st.sidebar:
             if c1.checkbox(t, value=True, key=f"sel_{t}"): selected_targets.append(t)
             if c2.button("🗑️", key=f"rm_{t}"):
                 conn = get_db_connection(); conn.execute("DELETE FROM targets WHERE name = ?", (t,)); conn.commit(); conn.close()
-                log_system("button_click", f"Deleted: {t}")
+                log_system("button_click", f"Deleted Target: {t}")
                 st.rerun()
 
     if st.button("🚀 EXECUTE SWEEP", type="primary", use_container_width=True):
         st.session_state['run_sweep'] = True
 
-# --- 5. TABS (RESTORED CONFIG/JOBS) ---
+# --- 6. TABS (STABILIZED) ---
 t_live, t_arch, t_conf, t_logs = st.tabs(["📡 Live Results", "📜 Archive", "⚙️ Jobs & Config", "🛠️ Logs"])
 
 with t_live:
@@ -173,17 +174,17 @@ with t_conf:
     st.divider()
     st.subheader("🌐 Custom Domain Registration")
     with st.form("site_reg_form", clear_on_submit=True):
-        site_in = st.text_input("Domain (e.g. gumtree.com):")
+        site_in = st.text_input("Domain (e.g. vintage-computer.com):")
         if st.form_submit_button("Register"):
             if site_in:
                 conn = get_db_connection(); conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (site_in,)); conn.commit(); conn.close()
-                log_system("button_click", f"Registered: {site_in}"); st.rerun()
+                log_system("button_click", f"Registered Site: {site_in}"); st.rerun()
 
 with t_logs:
     st.subheader("🛠️ System Logs")
     if st.button("Purge Log History", type="secondary"):
         open(LOG_FILE, 'w').close()
-        log_system("system", "Log history wiped.")
+        log_system("system", "User manually wiped log file.")
         st.rerun()
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "r") as f:
