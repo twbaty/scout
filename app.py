@@ -27,14 +27,25 @@ def get_db_connection():
 
 def init_db():
     conn = get_db_connection()
-    # Items Table
+    # Ensure items table exists
     conn.execute('''CREATE TABLE IF NOT EXISTS items 
                     (id INTEGER PRIMARY KEY, found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
                     target TEXT, source TEXT, title TEXT, price TEXT, url TEXT UNIQUE)''')
-    # Targets Table (Updated with schedule columns)
-    conn.execute('''CREATE TABLE IF NOT EXISTS targets 
-                    (name TEXT PRIMARY KEY, frequency TEXT DEFAULT 'Manual', last_run TIMESTAMP)''')
-    conn.commit(); conn.close()
+    
+    # Ensure targets table exists
+    conn.execute('''CREATE TABLE IF NOT EXISTS targets (name TEXT PRIMARY KEY)''')
+    
+    # Check if 'frequency' column exists, if not, add it
+    cursor = conn.execute("PRAGMA table_info(targets)")
+    columns = [column[1] for column in cursor.fetchall()]
+    
+    if 'frequency' not in columns:
+        conn.execute("ALTER TABLE targets ADD COLUMN frequency TEXT DEFAULT 'Manual'")
+    if 'last_run' not in columns:
+        conn.execute("ALTER TABLE targets ADD COLUMN last_run TIMESTAMP")
+        
+    conn.commit()
+    conn.close()
 
 init_db()
 
