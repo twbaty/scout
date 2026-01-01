@@ -1,6 +1,31 @@
-# SCOUT TERMINAL VERSION: 3.61
-# LIVE: Google dorking via SerpAPI
-# AUTH: .streamlit/secrets.toml
+# ============================================================
+# SCOUT – Intelligence Terminal
+# VERSION: 3.62
+#
+# STATUS:
+# - Google Search via SerpAPI: ENABLED
+# - eBay Marketplace (SerpAPI): PLANNED (disabled in UI)
+# - Amazon Marketplace (SerpAPI): PLANNED (disabled in UI)
+# - Etsy Marketplace (SerpAPI): PLANNED (disabled in UI)
+#
+# NOTES:
+# - Site-based searches are performed via Google dorking:
+#   site:<domain> <keyword>
+# - API key loaded from .streamlit/secrets.toml
+# - UI is intentionally explicit about active vs planned engines
+# ============================================================
+
+
+This version:
+- Makes engine state **explicit**
+- Prevents accidental assumptions
+- Keeps backend exactly as-is
+
+```python
+# SCOUT TERMINAL VERSION: 3.62
+# UI: Explicit engine visibility
+# Engine: Google (SerpAPI) enabled
+# Others: Visible but disabled (Planned)
 
 import streamlit as st
 import pandas as pd
@@ -35,7 +60,7 @@ def log_event(tag, msg, level=logging.INFO):
 def get_db():
     return sqlite3.connect("scout.db", check_same_thread=False)
 
-# ---------------- REAL COLLECTOR ----------------
+# ---------------- COLLECTOR ----------------
 def google_serpapi_dork(keyword, domain):
     query = f"site:{domain} {keyword}"
     log_event("COLLECTOR", f"Google dork: {query}")
@@ -69,10 +94,19 @@ def google_serpapi_dork(keyword, domain):
 
 # ---------------- SIDEBAR ----------------
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.61")
-    conn = get_db()
+    st.title("🛡️ SCOUT v3.62")
 
-    st.subheader("📡 Sites (Google Dorking)")
+    st.subheader("🔍 Search Engines (SerpAPI)")
+    st.checkbox("Google (site-based)", value=True, disabled=True)
+    st.checkbox("eBay (Marketplace)", value=False, disabled=True, help="Planned")
+    st.checkbox("Amazon (Marketplace)", value=False, disabled=True, help="Planned")
+    st.checkbox("Etsy (Marketplace)", value=False, disabled=True, help="Planned")
+
+    st.caption("Active engine: Google Search via SerpAPI")
+    st.divider()
+
+    conn = get_db()
+    st.subheader("📡 Sites (searched via Google)")
     sites = pd.read_sql_query("SELECT domain FROM custom_sites", conn)["domain"].tolist()
     active_sites = [s for s in sites if st.toggle(s, value=True, key=f"site_{s}")]
 
@@ -105,7 +139,7 @@ t_live, t_arch, t_jobs, t_logs = st.tabs(
 # ---------------- LIVE FEED ----------------
 with t_live:
     if st.session_state.get("run_sweep"):
-        with st.status("🔎 Searching Google…") as status:
+        with st.status("🔎 Searching via Google…") as status:
             conn = get_db()
             total = 0
 
@@ -163,7 +197,7 @@ with t_arch:
 
 # ---------------- JOBS ----------------
 with t_jobs:
-    st.subheader("📡 Add Site (Google Dorked)")
+    st.subheader("📡 Add Site (Google Search)")
     with st.form("add_site", clear_on_submit=True):
         ns = st.text_input("Domain (e.g. vintage-computer.com)")
         if st.form_submit_button("Add Site") and ns:
