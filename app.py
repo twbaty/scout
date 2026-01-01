@@ -1,5 +1,5 @@
-# SCOUT TERMINAL VERSION: 3.9
-# UPDATES: Decoupled Scheduling, Job-Based Automation, Enhanced OS Logging
+# SCOUT TERMINAL VERSION: 3.10
+# UPDATES: Fixed NameError (Scope Fix), Decoupled Scheduling, Enhanced OS Logging
 
 import streamlit as st
 import pandas as pd
@@ -35,20 +35,23 @@ def get_db_connection():
 
 def init_db():
     conn = get_db_connection()
-    # Items Found
     conn.execute('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, target TEXT, source TEXT, title TEXT, price TEXT, url TEXT UNIQUE)')
-    # Keyword Library (Independent)
     conn.execute('CREATE TABLE IF NOT EXISTS targets (name TEXT PRIMARY KEY)')
-    # Scheduled Jobs (Independent)
     conn.execute('CREATE TABLE IF NOT EXISTS schedules (job_id INTEGER PRIMARY KEY, job_name TEXT, frequency TEXT, target_list TEXT, last_run TIMESTAMP)')
-    # Custom Sites
     conn.execute('CREATE TABLE IF NOT EXISTS custom_sites (domain TEXT PRIMARY KEY)')
     conn.commit(); conn.close()
-    log_system("init", "Decoupled Schema Verified.")
+    log_system("init", "Database verified and online.")
 
 init_db()
 
-# --- 3. THE ENGINE ---
+# --- 3. GLOBAL DATA FETCH (Fixes NameError) ---
+# We fetch this here so 'targets_list' is available to ALL tabs and the sidebar
+conn = get_db_connection()
+targets_df = pd.read_sql_query("SELECT name FROM targets", conn)
+targets_list = targets_df['name'].tolist()
+conn.close()
+
+# --- 4. THE ENGINE ---
 def run_scout_mission(query, engine_type, custom_domain=None):
     url = "https://serpapi.com/search.json"
     q = str(query).strip()
@@ -84,9 +87,9 @@ def run_scout_mission(query, engine_type, custom_domain=None):
         log_system("error", f"FAILED: {label} -> {str(e)}")
         return []
 
-# --- 4. SIDEBAR ---
+# --- 5. SIDEBAR ---
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.9")
+    st.title("🛡️ SCOUT v3.10")
     
     st.subheader("📡 Deep Search Sites")
     conn = get_db_connection()
@@ -106,12 +109,8 @@ with st.sidebar:
                     log_system("button_click", f"Lib Add: {new_t}")
                     st.rerun()
 
-        conn = get_db_connection()
-        t_list = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
-        conn.close()
-        
         selected_targets = []
-        for t in t_list:
+        for t in targets_list: # Uses the global list
             c1, c2 = st.columns([4, 1])
             if c1.checkbox(t, value=True, key=f"sel_{t}"): selected_targets.append(t)
             if c2.button("🗑️", key=f"rm_{t}"):
@@ -126,7 +125,7 @@ with st.sidebar:
         st.session_state['run_sweep'] = True
         log_system("button_click", "Manual Sweep Started")
 
-# --- 5. TABS ---
+# --- 6. TABS ---
 t_live, t_dash, t_arch, t_conf, t_logs = st.tabs(["📡 Live Results", "📊 Dashboard", "📜 Archive", "⚙️ Config", "🛠️ Logs"])
 
 with t_live:
@@ -156,7 +155,6 @@ with t_live:
 with t_conf:
     st.header("⚙️ Configuration & Scheduling")
     
-    # Marketplace Toggles
     st.subheader("1. Global Toggles")
     c1, c2, c3 = st.columns(3)
     c1.toggle("Ebay", value=True, key="p_ebay")
@@ -165,13 +163,12 @@ with t_conf:
     
     st.divider()
     
-    # DECOUPLED SCHEDULING
     st.subheader("2. Automation Jobs")
     with st.expander("📝 Create New Schedule Job"):
         with st.form("job_form", clear_on_submit=True):
-            j_name = st.text_input("Job Name (e.g. Daily Tech Sweep):")
+            j_name = st.text_input("Job Name:")
             j_freq = st.selectbox("Frequency:", ["Daily", "M-W-F", "Weekly", "Bi-Weekly"])
-            j_targets = st.multiselect("Assign Keywords:", targets_list)
+            j_targets = st.multiselect("Assign Keywords:", targets_list) # NO LONGER CRASHES
             if st.form_submit_button("Create Job"):
                 if j_name and j_targets:
                     conn = get_db_connection()
@@ -201,7 +198,7 @@ with t_conf:
     st.divider()
     st.subheader("3. Custom Domain Management")
     with st.form("site_form", clear_on_submit=True):
-        site_in = st.text_input("Domain (e.g. gumtree.com):")
+        site_in = st.text_input("Domain (e.g. vintage-computer.com):")
         if st.form_submit_button("Register Site"):
             if site_in:
                 conn = get_db_connection()
