@@ -125,7 +125,7 @@ with tab1:
         if not current_targets:
             st.warning("Library is empty. Add a target in the sidebar.")
         else:
-            found_this_run = 0
+            all_found_items = [] # Temporary list for this specific run
             with st.status("Executing Multi-Target Sweep...", expanded=True) as status:
                 for target in current_targets:
                     st.write(f"Scouting eBay for: **{target}**")
@@ -133,23 +133,37 @@ with tab1:
                     
                     conn = get_db_connection()
                     for item in found:
+                        # Add to our "Live View" list regardless of if it's in DB
+                        all_found_items.append(item)
                         try:
-                            # The UNIQUE constraint on URL prevents duplicates
                             conn.execute("INSERT INTO items (target, title, price, url) VALUES (?, ?, ?, ?)",
                                          (item['target'], item['title'], item['price'], item['url']))
-                            found_this_run += 1
                         except sqlite3.IntegrityError:
-                            pass # We've seen this link before
+                            pass 
                     conn.commit()
                     conn.close()
-                status.update(label="✅ All Library Targets Scouted!", state="complete")
+                status.update(label="✅ Sweep Complete!", state="complete")
             
-            st.success(f"Sweep complete. Discovered {found_this_run} new/updated items.")
-            # Trigger a refresh to update metrics at the top
-            if st.button("🔄 Update Dashboard Stats"):
+            # --- NEW: DISPLAY LIVE RESULTS HERE ---
+            st.subheader(f"Latest Intelligence Sweep ({datetime.now().strftime('%H:%M:%S')})")
+            
+            if all_found_items:
+                live_df = pd.DataFrame(all_found_items)
+                st.dataframe(
+                    live_df,
+                    column_config={"url": st.column_config.LinkColumn("View Listing")},
+                    use_container_width=True, 
+                    hide_index=True
+                )
+                st.success(f"Discovered {len(all_found_items)} total listings across all targets.")
+            else:
+                st.info("No listings found for your current library targets.")
+                
+            # Button to refresh the top metrics
+            if st.button("🔄 Update Dashboard Totals"):
                 st.rerun()
     else:
-        st.info("Initiate a 'Full Library Sweep' from the sidebar to check all saved targets.")
+        st.info("The terminal is idle. Initiate a 'Full Library Sweep' from the sidebar to see live findings.")
 
 with tab2:
     st.subheader("Historical Intelligence (Last 90 Days)")
