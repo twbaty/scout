@@ -1,10 +1,8 @@
-# SCOUT TERMINAL VERSION: 3.49
+# SCOUT TERMINAL VERSION: 3.50
 # FIXES:
-# - Restored scheduler UI
-# - Wired global engine toggles
-# - Live Feed shows current sweep only
-# - URLs clickable
-# - Expanded logging
+# - Restore log purge
+# - Add DEBUG mode toggle
+# - Expand logging when DEBUG enabled
 
 import streamlit as st
 import pandas as pd
@@ -18,14 +16,23 @@ from datetime import datetime
 st.set_page_config(page_title="SCOUT | Intelligence Terminal", layout="wide")
 
 LOG_FILE = "scout.log"
+
+# Initialize logging once
+if "log_level" not in st.session_state:
+    st.session_state["log_level"] = logging.INFO
+
 logging.basicConfig(
     filename=LOG_FILE,
-    level=logging.INFO,
+    level=st.session_state["log_level"],
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-def log_event(tag, msg):
-    logging.info(f"[{tag.upper()}] {msg}")
+def set_log_level(level):
+    logging.getLogger().setLevel(level)
+    st.session_state["log_level"] = level
+
+def log_event(tag, msg, level=logging.INFO):
+    logging.log(level, f"[{tag.upper()}] {msg}")
 
 def get_db():
     return sqlite3.connect("scout.db", check_same_thread=False)
@@ -34,6 +41,8 @@ def get_db():
 def fake_search(targets, sources):
     rows = []
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    log_event("DEBUG", f"fake_search targets={targets}, sources={sources}", logging.DEBUG)
 
     for src in sources:
         for t in targets:
@@ -49,7 +58,26 @@ def fake_search(targets, sources):
 
 # ---------------- SIDEBAR ----------------
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.49")
+    st.title("🛡️ SCOUT v3.50")
+
+    # ---- Logging controls ----
+    st.subheader("📝 Logging")
+
+    debug_mode = st.toggle("Debug Mode", value=(st.session_state["log_level"] == logging.DEBUG))
+    if debug_mode:
+        set_log_level(logging.DEBUG)
+        log_event("LOG", "Debug logging enabled", logging.DEBUG)
+    else:
+        set_log_level(logging.INFO)
+
+    if st.button("🧹 Purge Logs", width="stretch"):
+        if os.path.exists(LOG_FILE):
+            open(LOG_FILE, "w").close()
+            log_event("LOG", "Logs purged")
+        st.rerun()
+
+    st.divider()
+
     conn = get_db()
 
     # Global engines
@@ -71,6 +99,7 @@ with st.sidebar:
     active_customs = [s for s in c_list if st.toggle(s, value=True, key=f"site_{s}")]
 
     active_sources = engine_sources + active_customs
+    log_event("DEBUG", f"Active sources={active_sources}", logging.DEBUG)
 
     st.divider()
 
@@ -97,12 +126,13 @@ with st.sidebar:
                 log_event("CONFIG", f"Deleted keyword '{t}'")
                 st.rerun()
 
-    st.markdown("<br>" * 3, unsafe_allow_html=True)
-
     if st.button("🚀 EXECUTE SWEEP", type="primary", width="stretch"):
         st.session_state["run_sweep"] = True
         st.session_state["sweep_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_event("SWEEP", f"Ad-hoc sweep started for targets={selected_targets}, sources={active_sources}")
+        log_event(
+            "SWEEP",
+            f"Started targets={selected_targets}, sources={active_sources}"
+        )
 
     conn.close()
 
@@ -118,6 +148,7 @@ with t_live:
             conn = get_db()
 
             rows = fake_search(selected_targets, active_sources)
+
             if rows:
                 conn.executemany(
                     """
@@ -148,9 +179,7 @@ with t_live:
             df,
             use_container_width=True,
             hide_index=True,
-            column_config={
-                "url": st.column_config.LinkColumn("URL")
-            }
+            column_config={"url": st.column_config.LinkColumn("URL")}
         )
 
         st.session_state["run_sweep"] = False
@@ -167,9 +196,7 @@ with t_arch:
         df,
         use_container_width=True,
         hide_index=True,
-        column_config={
-            "url": st.column_config.LinkColumn("URL")
-        }
+        column_config={"url": st.column_config.LinkColumn("URL")}
     )
 
 # ---------------- JOBS & CONFIG ----------------
@@ -211,4 +238,4 @@ with t_jobs:
 with t_logs:
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-            st.code("".join(f.readlines()[-200:]))
+            st.code("".join(f.readlines()[-300:]))
