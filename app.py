@@ -41,11 +41,9 @@ def run_scout_mission(query, engine_type, custom_domain=None):
         params.update({"engine": "ebay", "_nkw": q})
         res_key, label = "ebay_results", "Ebay"
     elif engine_type == "custom":
-        # SITE: PEEL BACK Logic
         params.update({"engine": "google", "q": f"site:{custom_domain} {q}"})
         res_key, label = "organic_results", custom_domain.split('.')[0].title()
     else: 
-        # Etsy or Google Shopping
         search_q = f"site:etsy.com {q}" if engine_type == "etsy" else q
         params.update({"engine": "google_shopping", "q": search_q})
         res_key, label = "shopping_results", engine_type.title()
@@ -74,16 +72,16 @@ def run_scout_mission(query, engine_type, custom_domain=None):
 with st.sidebar:
     st.title("🛡️ SCOUT")
     
-    # FIX: Using 'key' to ensure state persistence
+    # Keyword Registration
     with st.expander("➕ Register Target", expanded=False):
-        new_k = st.text_input("Keyword:", key="sidebar_new_target")
-        if st.button("Add to Library", use_container_width=True):
-            if new_k:
-                conn = get_db_connection()
-                conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_k,))
-                conn.commit(); conn.close()
-                st.toast(f"Added {new_k}!")
-                st.rerun()
+        with st.form("target_form", clear_on_submit=True):
+            new_k = st.text_input("Keyword:")
+            if st.form_submit_button("Add to Library"):
+                if new_k:
+                    conn = get_db_connection()
+                    conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_k,))
+                    conn.commit(); conn.close()
+                    st.rerun()
 
     st.divider()
     conn = get_db_connection()
@@ -148,7 +146,7 @@ with t_arch:
     st.dataframe(df_arch, column_config={"url": st.column_config.LinkColumn("Link")}, use_container_width=True, hide_index=True)
 
 with t_conf:
-    st.subheader("1. Active Marketplace Toggles")
+    st.subheader("1. Marketplace Toggles")
     c1, c2, c3 = st.columns(3)
     c1.toggle("Ebay", value=True, key="p_ebay")
     c2.toggle("Etsy", value=True, key="p_etsy")
@@ -173,19 +171,33 @@ with t_conf:
 
     st.divider()
     st.subheader("3. Custom Domain Registration")
-    # FIX: Added key to prevent "Blinking without adding"
-    new_site = st.text_input("Domain (e.g. vintage-computer.com):", key="conf_new_site")
-    if st.button("Register Custom Site"):
-        if new_site:
+    
+    # FORM WRAPPER: Ensures domain registration is captured reliably
+    with st.form("custom_site_form", clear_on_submit=True):
+        new_site = st.text_input("Domain (e.g. vintage-computer.com):")
+        submitted = st.form_submit_button("Register Custom Site")
+        if submitted and new_site:
             conn = get_db_connection()
             conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (new_site,))
             conn.commit(); conn.close()
             st.toast(f"Registered {new_site}!")
             st.rerun()
 
+    st.write("#### Currently Registered Sites")
+    conn = get_db_connection()
+    sites_df = pd.read_sql_query("SELECT domain FROM custom_sites", conn)
+    conn.close()
+    for s in sites_df['domain']:
+        c_site, c_del = st.columns([5, 1])
+        c_site.code(s)
+        if c_del.button("🗑️", key=f"del_site_{s}"):
+            conn = get_db_connection()
+            conn.execute("DELETE FROM custom_sites WHERE domain = ?", (s,))
+            conn.commit(); conn.close()
+            st.rerun()
+
 with t_logs:
-    st.subheader("System Logs")
-    if st.button("Clear History"):
+    if st.button("Clear Logs"):
         open(LOG_FILE, 'w').close()
         st.rerun()
     if os.path.exists(LOG_FILE):
