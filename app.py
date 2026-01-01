@@ -32,16 +32,16 @@ except:
     st.error("Missing API Key in .streamlit/secrets.toml")
     st.stop()
 
-# --- FIXED LOGGING ---
+# --- LOGGING SETUP ---
 LOG_FILE = 'scout.log'
 def setup_logger():
-    logger = logging.getLogger("SCOUT")
-    logger.setLevel(logging.INFO)
-    if not logger.handlers:
-        handler = logging.FileHandler(LOG_FILE)
-        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logger.addHandler(handler)
-    return logger
+    l = logging.getLogger("SCOUT")
+    l.setLevel(logging.INFO)
+    if not l.handlers:
+        h = logging.FileHandler(LOG_FILE)
+        h.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        l.addHandler(h)
+    return l
 
 logger = setup_logger()
 
@@ -67,56 +67,43 @@ def run_scout_mission(query, engine):
     try:
         response = requests.get(url, params=params, timeout=15)
         data = response.json()
-        
-        # Log status of request
-        logger.info(f"Engine: {engine} | Query: {query} | Status: {response.status_code}")
+        logger.info(f"Sweep: {engine} | Target: {query} | Status: {response.status_code}")
         
         raw_items = []
         if engine == "ebay": raw_items = data.get("ebay_results", [])
         elif engine == "etsy": raw_items = data.get("etsy_results", [])
         elif engine == "google_shopping": raw_items = data.get("shopping_results", [])
 
-        if not isinstance(raw_items, list):
-            logger.warning(f"No list returned for {engine}: {data.get('error', 'Unknown Error')}")
-            return []
-
         results = []
-        for i in raw_items[:20]:
-            price_val = i.get("price")
-            if isinstance(price_val, dict): price_val = price_val.get("raw", "N/A")
-            
-            # Normalize Source Name to prevent duplicate columns in Dashboard
-            source_label = engine.replace("_", " ").title() 
-            
-            results.append({
-                "target": query,
-                "source": source_label,
-                "title": i.get("title", "No Title"),
-                "price": price_val if price_val else "N/A",
-                "url": i.get("link", i.get("product_link", "#"))
-            })
+        # Normalizing Source Labels for Dashboard consistency
+        label_map = {"ebay": "Ebay", "etsy": "Etsy", "google_shopping": "Google Shopping"}
+        source_label = label_map.get(engine, engine.title())
+
+        if isinstance(raw_items, list):
+            for i in raw_items[:20]:
+                p = i.get("price")
+                price_str = p.get("raw", "N/A") if isinstance(p, dict) else (p if p else "N/A")
+                results.append({
+                    "target": query, "source": source_label, "title": i.get("title", "No Title"),
+                    "price": price_str, "url": i.get("link", i.get("product_link", "#"))
+                })
         return results
     except Exception as e:
-        logger.error(f"Critical Failure on {engine}: {str(e)}")
+        logger.error(f"Error on {engine}: {str(e)}")
         return []
 
-# --- 4. SIDEBAR (Immediate Ad-hoc Use) ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.title("🛡️ SCOUT")
-    
-    # Simple Ad-hoc Registration
     with st.expander("➕ Quick Add Target", expanded=True):
-        quick_k = st.text_input("New Search Keyword:", key="sb_quick_k")
+        quick_k = st.text_input("Keyword:", key="sb_quick_k")
         if st.button("Add to List", use_container_width=True):
             if quick_k:
                 conn = get_db_connection()
                 conn.execute("INSERT OR IGNORE INTO targets (name, frequency) VALUES (?, 'Manual')", (quick_k,))
                 conn.commit(); conn.close()
                 st.rerun()
-
     st.divider()
-    
-    # Management of active keywords
     st.write("### Active Targets")
     conn = get_db_connection()
     targets_df = pd.read_sql_query("SELECT name FROM targets", conn)
@@ -132,7 +119,6 @@ with st.sidebar:
             conn.execute("DELETE FROM targets WHERE name = ?", (t,))
             conn.commit(); conn.close()
             st.rerun()
-    
     st.divider()
     run_mission = st.button("🚀 EXECUTE SWEEP", use_container_width=True, type="primary")
 
@@ -145,7 +131,6 @@ with t_live:
         with st.status("Gathering Intel...", expanded=True) as status:
             for target in selected_targets:
                 st.write(f"Scouting: **{target}**")
-                # Check config toggles from session state
                 if st.session_state.get('p_ebay', True): all_hits.extend(run_scout_mission(target, "ebay"))
                 if st.session_state.get('p_etsy', True): all_hits.extend(run_scout_mission(target, "etsy"))
                 if st.session_state.get('p_google', True): all_hits.extend(run_scout_mission(target, "google_shopping"))
@@ -153,7 +138,6 @@ with t_live:
                 conn = get_db_connection()
                 conn.execute("UPDATE targets SET last_run = ? WHERE name = ?", (datetime.now().strftime("%Y-%m-%d %H:%M"), target))
                 conn.commit(); conn.close()
-                time.sleep(0.5)
             
             conn = get_db_connection()
             for h in all_hits:
@@ -166,7 +150,7 @@ with t_live:
     if st.session_state.get('last_results'):
         st.dataframe(pd.DataFrame(st.session_state['last_results']), use_container_width=True, hide_index=True)
     else:
-        st.info("System Ready. Add/Select keywords on the left and Execute Sweep.")
+        st.info("System Ready. Add/Select keywords on the left.")
 
 with t_dash:
     conn = get_db_connection()
@@ -174,53 +158,52 @@ with t_dash:
     conn.close()
     if not df_all.empty:
         st.subheader("🎯 Intelligence Overview")
-        # Pivoting ensures unified columns
+        # Standardizing pivot to handle any weird data cases
         heatmap = df_all.groupby(['target', 'source']).size().unstack(fill_value=0)
         st.table(heatmap)
 
 with t_arch:
     st.header("Intelligence Archive")
     conn = get_db_connection()
-    arch_df = pd.read_sql_query(f"SELECT found_date, source, target, title, price, url FROM items ORDER BY found_date DESC LIMIT 100", conn)
+    arch_df = pd.read_sql_query("SELECT found_date, source, target, title, price, url FROM items ORDER BY found_date DESC LIMIT 100", conn)
     conn.close()
     st.dataframe(arch_df, column_config={"url": st.column_config.LinkColumn("Link")}, use_container_width=True, hide_index=True)
 
 with t_conf:
-    st.header("⚙️ System Configuration")
-    
-    st.subheader("1. Active Search Engines")
+    st.header("⚙️ Configuration")
+    st.subheader("1. Search Engines")
     c1, c2, c3 = st.columns(3)
     c1.toggle("eBay", value=True, key="p_ebay")
     c2.toggle("Etsy", value=True, key="p_etsy")
     c3.toggle("Google Shopping", value=True, key="p_google")
     
     st.divider()
-    
-    st.subheader("2. Target Scheduling & Automation")
-    st.info("Set frequency for background tasks here. Manual targets appear only in the sidebar.")
-    
+    st.subheader("2. Target Automation")
     conn = get_db_connection()
     sched_df = pd.read_sql_query("SELECT * FROM targets", conn)
     conn.close()
     
-    for idx, row in sched_df.iterrows():
+    options = ["Manual", "Daily", "Weekly"]
+    for _, row in sched_df.iterrows():
         sc1, sc2, sc3 = st.columns([3, 2, 1])
         sc1.write(f"**{row['name']}**")
-        new_freq = sc2.selectbox("Freq:", ["Manual", "Daily", "Weekly"], index=["Manual", "Daily", "Weekly"].index(row['frequency']), key=f"f_{row['name']}")
+        
+        # --- THE FIX: SAFETY CHECK FOR INDEX ---
+        current_val = row['frequency'] if row['frequency'] in options else "Manual"
+        idx = options.index(current_val)
+        
+        new_freq = sc2.selectbox("Freq:", options, index=idx, key=f"f_{row['name']}")
         if new_freq != row['frequency']:
             conn = get_db_connection()
             conn.execute("UPDATE targets SET frequency = ? WHERE name = ?", (new_freq, row['name']))
             conn.commit(); conn.close()
             st.rerun()
-        sc3.write(f"Last: {row['last_run'] if row['last_run'] else 'Never'}")
+        sc3.write(f"Run: {row['last_run']}")
 
 with t_logs:
-    st.header("System Logs")
     if st.button("Clear Log History"):
-        if os.path.exists(LOG_FILE): 
-            with open(LOG_FILE, 'w') as f: f.write("")
-            st.rerun()
+        open(LOG_FILE, 'w').close()
+        st.rerun()
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "r") as f:
-            log_data = f.readlines()
-            st.code("".join(log_data[-50:]))
+            st.code("".join(f.readlines()[-50:]))
