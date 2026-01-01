@@ -44,22 +44,23 @@ def scout_ebay(query):
         "api_key": SERP_API_KEY
     }
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, timeout=15)
         data = response.json()
         
-        # DEBUG: This will show us if the API is actually mad at us
-        if "error" in data:
-            logger.error(f"SerpApi Error: {data['error']}")
-            return []
-            
-        # Check if the key name is actually correct
-        items = data.get("ebay_results", [])
-        if not items:
-            logger.warning(f"API returned 200 but 'ebay_results' is empty. Keys found: {list(data.keys())}")
-            
-        return [{"title": i.get("title"), "price": i.get("price", {}).get("raw"), "url": i.get("link")} for i in items]
+        # FIX: eBay results in SerpApi are often under 'organic_results'
+        items = data.get("organic_results") or data.get("ebay_results") or []
+        
+        results = []
+        for i in items[:15]:
+            results.append({
+                "target": query, "source": "eBay",
+                "title": i.get("title"),
+                "price": i.get("price", {}).get("raw", "N/A"),
+                "url": i.get("link")
+            })
+        return results
     except Exception as e:
-        logger.error(f"Critical API Failure: {e}")
+        logger.error(f"eBay Mapping Error: {e}")
         return []
 
 def scout_etsy(query):
