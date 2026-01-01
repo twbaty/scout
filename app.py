@@ -1,5 +1,5 @@
-# SCOUT TERMINAL VERSION: 3.26
-# MODULAR LIBRARIES: Data (DB), UI (Sidebar), Engine (SerpApi), Tabs (Display)
+# SCOUT TERMINAL VERSION: 3.27
+# MODULAR LIBRARIES: Sidebar(L), Engine(C), Settings(R)
 
 import streamlit as st
 import pandas as pd
@@ -9,7 +9,7 @@ import time
 import random
 import logging
 
-# --- LIBRARY 1: SYSTEM & LOGGING ---
+# --- [LIBRARY 1: CORE SYSTEM & 2026 COMPLIANCE] ---
 st.set_page_config(page_title="SCOUT | Intelligence Terminal", layout="wide")
 LOG_FILE = 'scout.log'
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -17,89 +17,93 @@ logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s -
 def log_event(tag, msg):
     logging.info(f"[{tag.upper()}] {msg}")
 
-# --- LIBRARY 2: DATA PERSISTENCE (The Archive Fix) ---
 def get_db():
     return sqlite3.connect("scout.db", check_same_thread=False)
 
-def init_db():
-    conn = get_db()
-    conn.execute('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, target TEXT, source TEXT, title TEXT, price TEXT, url TEXT UNIQUE)')
-    conn.execute('CREATE TABLE IF NOT EXISTS targets (name TEXT PRIMARY KEY)')
-    conn.execute('CREATE TABLE IF NOT EXISTS custom_sites (domain TEXT PRIMARY KEY)')
-    conn.commit(); conn.close()
-
-init_db()
-
-# --- LIBRARY 3: SIDEBAR UI (Restored Classic Stack) ---
+# --- [LIBRARY 2: SIDEBAR ARCHITECTURE (RESTORED)] ---
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.26")
+    st.title("🛡️ SCOUT v3.27")
     
-    # 1. EXECUTE (TOP)
+    # 1. EXECUTE SWEEP (TOP)
     if st.button("🚀 EXECUTE SWEEP", type="primary", width="stretch"):
         st.session_state['run_sweep'] = True
     
     st.divider()
     
-    # 2. DEEP SEARCH SITES (MIDDLE)
+    # 2. DEEP SEARCH SITES (STACKED)
     st.subheader("📡 Deep Search Sites")
     conn = get_db()
-    customs = pd.read_sql_query("SELECT domain FROM custom_sites", conn)['domain'].tolist()
-    active_customs = []
-    for site in customs:
-        if st.toggle(site, value=True, key=f"tog_{site}"):
-            active_customs.append(site)
-    conn.close()
-
+    c_list = pd.read_sql_query("SELECT domain FROM custom_sites", conn)['domain'].tolist()
+    active_customs = [s for s in c_list if st.toggle(s, value=True, key=f"side_{s}")]
+    
     st.divider()
 
-    # 3. KEYWORD LIBRARY (BOTTOM)
+    # 3. KEYWORD LIBRARY (WITH DELETE)
     with st.expander("🎯 Keyword Library", expanded=True):
-        with st.form("add_v26", clear_on_submit=True):
+        with st.form("lib_v27", clear_on_submit=True):
             nt = st.text_input("New Target:")
             if st.form_submit_button("＋", width="stretch"):
                 if nt:
-                    conn = get_db(); conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (nt,)); conn.commit(); conn.close()
-                    st.rerun()
+                    conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (nt,))
+                    conn.commit(); st.rerun()
         
-        conn = get_db()
-        targets = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
+        t_list = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
         selected_targets = []
-        for t in targets:
-            col_check, col_del = st.columns([4, 1])
-            if col_check.checkbox(t, value=True, key=f"chk_{t}"):
-                selected_targets.append(t)
-            if col_del.button("🗑️", key=f"del_{t}"):
+        for t in t_list:
+            c_chk, c_del = st.columns([4, 1])
+            if c_chk.checkbox(t, value=True, key=f"c_{t}"): selected_targets.append(t)
+            if c_del.button("🗑️", key=f"d_{t}"):
                 conn.execute("DELETE FROM targets WHERE name = ?", (t,))
-                conn.commit(); conn.close(); st.rerun()
-        conn.close()
+                conn.commit(); st.rerun()
+    conn.close()
 
-# --- LIBRARY 4: TABS & DATA VIEW ---
-t_live, t_arch, t_conf, t_logs = st.tabs(["📡 Live Results", "📜 Archive", "⚙️ Jobs", "🛠️ Logs"])
+# --- [LIBRARY 3: TAB NAVIGATION & SETTINGS RECOVERY] ---
+# Tabs are defined here so they are globally accessible
+t_live, t_arch, t_jobs, t_set, t_logs = st.tabs(["📡 Live", "📜 Archive", "⚙️ Jobs", "🛠️ Settings", "📝 Logs"])
 
 with t_live:
-    # Manual Toggles for Engines
-    c1, c2, c3 = st.columns(3)
-    p_ebay = c1.toggle("eBay", value=True)
-    p_etsy = c2.toggle("Etsy", value=False) # Defaulted to off per your car/computer part rule
-    p_goog = c3.toggle("Google", value=True)
+    # Manual Overrides for current session
+    col1, col2, col3 = st.columns(3)
+    p_ebay = col1.toggle("eBay", value=True)
+    p_etsy = col2.toggle("Etsy", value=False)
+    p_goog = col3.toggle("Google", value=True)
     
     if st.session_state.get('run_sweep'):
-        # Mission Logic Execution...
+        # Mission Logic runs here...
         st.session_state['run_sweep'] = False
-        st.success("Sweep Complete.")
 
 with t_arch:
-    st.subheader("📜 Archive")
+    st.subheader("📜 Historical Findings")
     conn = get_db()
     arch_df = pd.read_sql_query("SELECT * FROM items ORDER BY found_date DESC", conn)
     conn.close()
     if not arch_df.empty:
         st.dataframe(arch_df, width="stretch", hide_index=True)
     else:
-        st.info("Archive is currently empty. Run a sweep to populate.")
+        st.info("Archive is empty. Run a sweep to collect data.")
+
+with t_jobs:
+    st.subheader("⚙️ Automated Missions")
+    conn = get_db()
+    jobs_df = pd.read_sql_query("SELECT * FROM schedules", conn)
+    conn.close()
+    if not jobs_df.empty:
+        st.dataframe(jobs_df, width="stretch", hide_index=True)
+    else:
+        st.caption("No jobs scheduled yet.")
+
+with t_set:
+    st.header("🛠️ System Settings")
+    st.subheader("📡 Deep Search Management")
+    with st.form("add_site_v27"):
+        ns = st.text_input("Add Custom Site (e.g. vintage-computer.com):")
+        if st.form_submit_button("Add Site", width="stretch"):
+            if ns:
+                conn = get_db(); conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (ns,))
+                conn.commit(); conn.close(); st.rerun()
 
 with t_logs:
-    if st.button("🗑️ Purge Log", width="stretch"):
+    if st.button("🗑️ Purge Log History", width="stretch"):
         open(LOG_FILE, 'w').close()
         st.rerun()
     if os.path.exists(LOG_FILE):
