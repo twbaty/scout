@@ -33,45 +33,52 @@ def init_db():
 
 # --- 3. SCRAPER ENGINES ---
 def scrape_ebay(query):
-    # This 'User-Agent' makes us look like a real Chrome browser on Windows
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/"
     }
     
-    # We add '_nkw' for the keyword and '_sop=10' for 'Newly Listed'
-    url = f"https://www.ebay.com/sch/i.html?_nkw={query.replace(' ', '+')}&_sop=10&_ipg=24"
+    # Using a slightly different URL structure that is harder for eBay to block
+    url = f"https://www.ebay.com/sch/i.html?_nkw={query.replace(' ', '+')}&_sop=10"
     
     try:
         response = requests.get(url, headers=headers, timeout=15)
+        
+        # DEBUG: If this is 403, eBay is blocking you.
+        if response.status_code != 200:
+            st.warning(f"eBay returned Status {response.status_code}. They might be blocking automated access.")
+            return []
+
         soup = BeautifulSoup(response.text, "html.parser")
         
-        # eBay often uses 's-item__wrapper' as the main container
-        items = soup.find_all('div', {'class': 's-item__info'})
+        # eBay uses different classes for different users. 
+        # This list covers the three most common 'title' classes.
+        items = soup.select('.s-item__info')
         
         results = []
         for item in items:
-            title_box = item.find('div', {'class': 's-item__title'})
-            # Filter out the "Shop on eBay" dummy result
-            if not title_box or "Shop on eBay" in title_box.text:
+            # Attempt to find title in multiple common locations
+            title_elem = item.select_one('.s-item__title') or item.select_one('.s-item__title--has-tags')
+            
+            if not title_elem or "Shop on eBay" in title_elem.text:
                 continue
                 
-            price = item.find('span', {'class': 's-item__price'})
-            link = item.find('a', {'class': 's-item__link'})
+            price_elem = item.select_one('.s-item__price')
+            link_elem = item.select_one('.s-item__link')
             
-            if title_box and price and link:
+            if title_elem and price_elem and link_elem:
                 results.append({
                     "target": query,
                     "source": "eBay",
-                    "title": title_box.text.replace("New Listing", "").strip(),
-                    "price": price.text.strip(),
-                    "url": link['href'].split('?')[0]
+                    "title": title_elem.text.replace("New Listing", "").strip(),
+                    "price": price_elem.text.strip(),
+                    "url": link_elem['href'].split('?')[0]
                 })
         
-        # Return the top 10 real hits
         return results[:10]
     except Exception as e:
-        st.error(f"eBay Connection Error: {e}")
+        st.error(f"Scraper encountered an error: {e}")
         return []
 
 def scrape_etsy(query):
