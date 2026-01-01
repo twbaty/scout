@@ -10,14 +10,12 @@ from datetime import datetime
 # --- 1. CORE SYSTEM CONFIG ---
 st.set_page_config(page_title="SCOUT | Terminal", layout="wide")
 
-# REFINED STICKY TABS CSS
+# REFINED STICKY TABS & CLEANUP
 st.markdown("""
     <style>
-    /* Hide Deploy Clutter */
     .stAppDeployButton {display:none;}
     [data-testid="stDecoration"] {display:none;}
     
-    /* Stick Tabs to Top */
     div[data-testid="stTabList"] {
         position: sticky;
         top: 0;
@@ -76,7 +74,6 @@ def run_scout_mission(query, engine):
 
         results = []
         for i in raw_items[:20]:
-            # Price extraction logic based on your JSON
             price_val = i.get("price")
             if isinstance(price_val, dict): price_val = price_val.get("raw", "N/A")
             
@@ -92,22 +89,44 @@ def run_scout_mission(query, engine):
         logger.error(f"Failure on {engine}: {str(e)}")
         return []
 
-# --- 4. SIDEBAR (Ad-hoc Selection ONLY) ---
+# --- 4. SIDEBAR (Full Management) ---
 with st.sidebar:
     st.title("🛡️ SCOUT")
-    st.write("### Target Selection")
     
+    # ADD NEW TARGET SECTION
+    with st.expander("➕ Register New Target", expanded=False):
+        new_k = st.text_input("Keyword:", key="sb_reg_k")
+        new_f = st.selectbox("Frequency:", ["Manual", "Daily", "Weekly"], key="sb_reg_f")
+        if st.button("Add to Library", use_container_width=True):
+            if new_k:
+                conn = get_db_connection()
+                conn.execute("INSERT OR IGNORE INTO targets (name, frequency) VALUES (?, ?)", (new_k, new_f))
+                conn.commit(); conn.close()
+                st.rerun()
+
+    st.divider()
+    
+    # ACTIVE TARGETS & DELETION
+    st.write("### Target Library")
     conn = get_db_connection()
     targets_df = pd.read_sql_query("SELECT name FROM targets", conn)
     conn.close()
     
-    # Simple checkbox list for selecting which keywords to run
-    selected_targets = [t for t in targets_df['name'] if st.checkbox(t, value=True, key=f"sel_{t}")]
+    selected_targets = []
+    for t in targets_df['name']:
+        col_chk, col_del = st.columns([4, 1])
+        if col_chk.checkbox(t, value=True, key=f"sb_chk_{t}"):
+            selected_targets.append(t)
+        if col_del.button("🗑️", key=f"sb_del_{t}"):
+            conn = get_db_connection()
+            conn.execute("DELETE FROM targets WHERE name = ?", (t,))
+            conn.commit(); conn.close()
+            st.rerun()
     
     st.divider()
     run_mission = st.button("🚀 EXECUTE SWEEP", use_container_width=True, type="primary")
 
-# --- 5. TABS ---
+# --- 5. MAIN INTERFACE TABS ---
 t_live, t_dash, t_arch, t_conf, t_logs = st.tabs(["📡 Live", "📊 Dashboard", "📜 Archive", "⚙️ Config", "🛠️ Logs"])
 
 with t_live:
@@ -136,13 +155,14 @@ with t_live:
     if st.session_state.get('last_results'):
         st.dataframe(pd.DataFrame(st.session_state['last_results']), use_container_width=True, hide_index=True)
     else:
-        st.info("System Ready. Select keywords on the left and Execute Sweep.")
+        st.info("System Ready. Manage targets in the sidebar and Execute Sweep.")
 
 with t_dash:
     conn = get_db_connection()
     df_all = pd.read_sql_query("SELECT source, target FROM items", conn)
     conn.close()
     if not df_all.empty:
+        st.subheader("🎯 Intelligence Overview")
         heatmap = df_all.groupby(['target', 'source']).size().unstack(fill_value=0)
         st.table(heatmap)
 
@@ -159,45 +179,19 @@ with t_arch:
     st.dataframe(arch_df, column_config={"url": st.column_config.LinkColumn("Link")}, use_container_width=True, hide_index=True, height=700)
 
 with t_conf:
-    st.header("⚙️ Configuration")
-    
-    # ENGINE TOGGLES
-    st.subheader("Marketplace Access")
+    st.header("⚙️ System Configuration")
+    st.subheader("Engine Access")
     c1, c2, c3 = st.columns(3)
     c1.toggle("eBay", value=True, key="p_ebay")
     c2.toggle("Etsy", value=True, key="p_etsy")
     c3.toggle("Google Shopping", value=True, key="p_google")
     
     st.divider()
-
-    # ADD NEW TARGET
-    st.subheader("➕ Register New Target")
-    with st.form("add_new"):
-        reg_k = st.text_input("Keyword:")
-        reg_f = st.selectbox("Frequency:", ["Manual", "Daily", "Weekly"])
-        if st.form_submit_button("Register"):
-            if reg_k:
-                conn = get_db_connection()
-                conn.execute("INSERT OR IGNORE INTO targets (name, frequency) VALUES (?, ?)", (reg_k, reg_f))
-                conn.commit(); conn.close()
-                st.rerun()
-
-    st.divider()
-
-    # MANAGE TARGETS
-    st.subheader("📋 Managed Targets")
+    st.write("### Target Statistics")
     conn = get_db_connection()
-    ledger = pd.read_sql_query("SELECT * FROM targets", conn)
+    stats_df = pd.read_sql_query("SELECT name, frequency, last_run FROM targets", conn)
     conn.close()
-    for _, row in ledger.iterrows():
-        lc1, lc2, lc3 = st.columns([3, 1, 0.5])
-        lc1.write(f"**{row['name']}**")
-        lc2.write(f"⏱️ {row['frequency']}")
-        if lc3.button("🗑️", key=f"mgr_{row['name']}"):
-            conn = get_db_connection()
-            conn.execute("DELETE FROM targets WHERE name = ?", (row['name'],))
-            conn.commit(); conn.close()
-            st.rerun()
+    st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
 with t_logs:
     if st.button("Purge Logs"):
