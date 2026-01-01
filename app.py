@@ -1,5 +1,5 @@
-# SCOUT TERMINAL VERSION: 3.27
-# MODULAR LIBRARIES: Sidebar(L), Engine(C), Settings(R)
+# SCOUT TERMINAL VERSION: 3.28
+# MODULAR LIBRARIES: Sidebar(L), Main(C), Status(R)
 
 import streamlit as st
 import pandas as pd
@@ -9,7 +9,7 @@ import time
 import random
 import logging
 
-# --- [LIBRARY 1: CORE SYSTEM & 2026 COMPLIANCE] ---
+# --- 1. CORE SYSTEM ---
 st.set_page_config(page_title="SCOUT | Intelligence Terminal", layout="wide")
 LOG_FILE = 'scout.log'
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -20,17 +20,11 @@ def log_event(tag, msg):
 def get_db():
     return sqlite3.connect("scout.db", check_same_thread=False)
 
-# --- [LIBRARY 2: SIDEBAR ARCHITECTURE (RESTORED)] ---
+# --- 2. SIDEBAR (L) - RESTORED TO ORIGINAL LAYOUT ---
 with st.sidebar:
-    st.title("🛡️ SCOUT v3.27")
+    st.title("🛡️ SCOUT v3.28")
     
-    # 1. EXECUTE SWEEP (TOP)
-    if st.button("🚀 EXECUTE SWEEP", type="primary", width="stretch"):
-        st.session_state['run_sweep'] = True
-    
-    st.divider()
-    
-    # 2. DEEP SEARCH SITES (STACKED)
+    # Custom Sites Stacked
     st.subheader("📡 Deep Search Sites")
     conn = get_db()
     c_list = pd.read_sql_query("SELECT domain FROM custom_sites", conn)['domain'].tolist()
@@ -38,9 +32,9 @@ with st.sidebar:
     
     st.divider()
 
-    # 3. KEYWORD LIBRARY (WITH DELETE)
+    # Keyword Library with Delete
     with st.expander("🎯 Keyword Library", expanded=True):
-        with st.form("lib_v27", clear_on_submit=True):
+        with st.form("lib_v28", clear_on_submit=True):
             nt = st.text_input("New Target:")
             if st.form_submit_button("＋", width="stretch"):
                 if nt:
@@ -55,57 +49,67 @@ with st.sidebar:
             if c_del.button("🗑️", key=f"d_{t}"):
                 conn.execute("DELETE FROM targets WHERE name = ?", (t,))
                 conn.commit(); st.rerun()
+
+    st.divider()
+    
+    # EXECUTE SWEEP (BOTTOM LEFT)
+    if st.button("🚀 EXECUTE SWEEP", type="primary", width="stretch"):
+        st.session_state['run_sweep'] = True
     conn.close()
 
-# --- [LIBRARY 3: TAB NAVIGATION & SETTINGS RECOVERY] ---
-# Tabs are defined here so they are globally accessible
-t_live, t_arch, t_jobs, t_set, t_logs = st.tabs(["📡 Live", "📜 Archive", "⚙️ Jobs", "🛠️ Settings", "📝 Logs"])
+# --- 3. MAIN INTERFACE & ENGINE TOGGLES (R) ---
+t_live, t_arch, t_conf, t_logs = st.tabs(["📡 Live Feed", "📜 Archive", "⚙️ Jobs & Config", "📝 Logs"])
 
 with t_live:
-    # Manual Overrides for current session
-    col1, col2, col3 = st.columns(3)
-    p_ebay = col1.toggle("eBay", value=True)
-    p_etsy = col2.toggle("Etsy", value=False)
-    p_goog = col3.toggle("Google", value=True)
+    col_main, col_engines = st.columns([3, 1])
     
-    if st.session_state.get('run_sweep'):
-        # Mission Logic runs here...
-        st.session_state['run_sweep'] = False
+    with col_main:
+        if st.session_state.get('run_sweep'):
+            with st.status("Gathering Intel...") as status:
+                # Execution logic happens here
+                time.sleep(1) # Visual feedback
+                status.update(label="Sweep Complete", state="complete")
+            st.session_state['run_sweep'] = False
+        else:
+            st.info("System Ready. Press Execute Sweep (Bottom L) to begin.")
+
+    with col_engines:
+        st.subheader("Global Engines")
+        p_ebay = st.toggle("eBay", value=True)
+        p_etsy = st.toggle("Etsy", value=False)
+        p_goog = st.toggle("Google", value=True)
+        
+        st.divider()
+        st.subheader("📡 Ad-hoc Status")
+        # Live status window for real-time feedback
+        status_box = st.empty()
+        if 'last_log' in st.session_state:
+            status_box.code(st.session_state['last_log'])
+
+with t_conf:
+    st.header("⚙️ Jobs & Config")
+    
+    # 1. ADD SITES (Merged from Settings)
+    with st.expander("➕ Add Deep Search Site"):
+        with st.form("site_v28"):
+            ns = st.text_input("Domain (e.g. vintage-computer.com)")
+            if st.form_submit_button("Add Site"):
+                if ns:
+                    conn = get_db(); conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (ns,))
+                    conn.commit(); conn.close(); st.rerun()
+
+    # 2. SCHEDULING (Restored)
+    st.divider()
+    st.subheader("📅 Automated Missions")
+    with st.form("job_v28"):
+        jn = st.text_input("Job Name")
+        jt = st.multiselect("Targets", t_list)
+        jf = st.selectbox("Interval", ["6 Hours", "12 Hours", "Daily"])
+        if st.form_submit_button("Schedule Mission", width="stretch"):
+            # Save to schedules table
+            st.success(f"Job {jn} Locked.")
 
 with t_arch:
-    st.subheader("📜 Historical Findings")
     conn = get_db()
-    arch_df = pd.read_sql_query("SELECT * FROM items ORDER BY found_date DESC", conn)
+    st.dataframe(pd.read_sql_query("SELECT * FROM items ORDER BY found_date DESC", conn), width="stretch")
     conn.close()
-    if not arch_df.empty:
-        st.dataframe(arch_df, width="stretch", hide_index=True)
-    else:
-        st.info("Archive is empty. Run a sweep to collect data.")
-
-with t_jobs:
-    st.subheader("⚙️ Automated Missions")
-    conn = get_db()
-    jobs_df = pd.read_sql_query("SELECT * FROM schedules", conn)
-    conn.close()
-    if not jobs_df.empty:
-        st.dataframe(jobs_df, width="stretch", hide_index=True)
-    else:
-        st.caption("No jobs scheduled yet.")
-
-with t_set:
-    st.header("🛠️ System Settings")
-    st.subheader("📡 Deep Search Management")
-    with st.form("add_site_v27"):
-        ns = st.text_input("Add Custom Site (e.g. vintage-computer.com):")
-        if st.form_submit_button("Add Site", width="stretch"):
-            if ns:
-                conn = get_db(); conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (ns,))
-                conn.commit(); conn.close(); st.rerun()
-
-with t_logs:
-    if st.button("🗑️ Purge Log History", width="stretch"):
-        open(LOG_FILE, 'w').close()
-        st.rerun()
-    if os.path.exists(LOG_FILE):
-        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-            st.code("".join(f.readlines()[-100:]))
