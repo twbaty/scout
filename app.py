@@ -10,12 +10,10 @@ from datetime import datetime
 # --- 1. CORE SYSTEM CONFIG ---
 st.set_page_config(page_title="SCOUT | Terminal", layout="wide")
 
-# REFINED STICKY TABS & CLEANUP
 st.markdown("""
     <style>
     .stAppDeployButton {display:none;}
     [data-testid="stDecoration"] {display:none;}
-    
     div[data-testid="stTabList"] {
         position: sticky;
         top: 0;
@@ -34,12 +32,16 @@ except:
     st.error("Missing API Key in .streamlit/secrets.toml")
     st.stop()
 
+# --- FIXED LOGGING ---
 LOG_FILE = 'scout.log'
 def setup_logger():
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
-    logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    return logging.getLogger(__name__)
+    logger = logging.getLogger("SCOUT")
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        handler = logging.FileHandler(LOG_FILE)
+        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(handler)
+    return logger
 
 logger = setup_logger()
 
@@ -65,59 +67,67 @@ def run_scout_mission(query, engine):
     try:
         response = requests.get(url, params=params, timeout=15)
         data = response.json()
+        
+        # Log status of request
+        logger.info(f"Engine: {engine} | Query: {query} | Status: {response.status_code}")
+        
         raw_items = []
         if engine == "ebay": raw_items = data.get("ebay_results", [])
         elif engine == "etsy": raw_items = data.get("etsy_results", [])
         elif engine == "google_shopping": raw_items = data.get("shopping_results", [])
 
-        if not isinstance(raw_items, list): return []
+        if not isinstance(raw_items, list):
+            logger.warning(f"No list returned for {engine}: {data.get('error', 'Unknown Error')}")
+            return []
 
         results = []
         for i in raw_items[:20]:
             price_val = i.get("price")
             if isinstance(price_val, dict): price_val = price_val.get("raw", "N/A")
             
+            # Normalize Source Name to prevent duplicate columns in Dashboard
+            source_label = engine.replace("_", " ").title() 
+            
             results.append({
                 "target": query,
-                "source": engine.replace("_", " ").capitalize(),
+                "source": source_label,
                 "title": i.get("title", "No Title"),
                 "price": price_val if price_val else "N/A",
                 "url": i.get("link", i.get("product_link", "#"))
             })
         return results
     except Exception as e:
-        logger.error(f"Failure on {engine}: {str(e)}")
+        logger.error(f"Critical Failure on {engine}: {str(e)}")
         return []
 
-# --- 4. SIDEBAR (Full Management) ---
+# --- 4. SIDEBAR (Immediate Ad-hoc Use) ---
 with st.sidebar:
     st.title("🛡️ SCOUT")
     
-    # ADD NEW TARGET SECTION
-    with st.expander("➕ Register New Target", expanded=False):
-        new_k = st.text_input("Keyword:", key="sb_reg_k")
-        new_f = st.selectbox("Frequency:", ["Manual", "Daily", "Weekly"], key="sb_reg_f")
-        if st.button("Add to Library", use_container_width=True):
-            if new_k:
+    # Simple Ad-hoc Registration
+    with st.expander("➕ Quick Add Target", expanded=True):
+        quick_k = st.text_input("New Search Keyword:", key="sb_quick_k")
+        if st.button("Add to List", use_container_width=True):
+            if quick_k:
                 conn = get_db_connection()
-                conn.execute("INSERT OR IGNORE INTO targets (name, frequency) VALUES (?, ?)", (new_k, new_f))
+                conn.execute("INSERT OR IGNORE INTO targets (name, frequency) VALUES (?, 'Manual')", (quick_k,))
                 conn.commit(); conn.close()
                 st.rerun()
 
     st.divider()
     
-    # ACTIVE TARGETS & DELETION
-    st.write("### Target Library")
+    # Management of active keywords
+    st.write("### Active Targets")
     conn = get_db_connection()
     targets_df = pd.read_sql_query("SELECT name FROM targets", conn)
     conn.close()
     
     selected_targets = []
     for t in targets_df['name']:
-        col_chk, col_del = st.columns([4, 1])
-        if col_chk.checkbox(t, value=True, key=f"sb_chk_{t}"):
+        c_chk, c_del = st.columns([4, 1])
+        if c_chk.checkbox(t, value=True, key=f"sb_chk_{t}"):
             selected_targets.append(t)
-        if col_del.button("🗑️", key=f"sb_del_{t}"):
+        if c_del.button("🗑️", key=f"sb_del_{t}"):
             conn = get_db_connection()
             conn.execute("DELETE FROM targets WHERE name = ?", (t,))
             conn.commit(); conn.close()
@@ -126,7 +136,7 @@ with st.sidebar:
     st.divider()
     run_mission = st.button("🚀 EXECUTE SWEEP", use_container_width=True, type="primary")
 
-# --- 5. MAIN INTERFACE TABS ---
+# --- 5. TABS ---
 t_live, t_dash, t_arch, t_conf, t_logs = st.tabs(["📡 Live", "📊 Dashboard", "📜 Archive", "⚙️ Config", "🛠️ Logs"])
 
 with t_live:
@@ -135,6 +145,7 @@ with t_live:
         with st.status("Gathering Intel...", expanded=True) as status:
             for target in selected_targets:
                 st.write(f"Scouting: **{target}**")
+                # Check config toggles from session state
                 if st.session_state.get('p_ebay', True): all_hits.extend(run_scout_mission(target, "ebay"))
                 if st.session_state.get('p_etsy', True): all_hits.extend(run_scout_mission(target, "etsy"))
                 if st.session_state.get('p_google', True): all_hits.extend(run_scout_mission(target, "google_shopping"))
@@ -155,7 +166,7 @@ with t_live:
     if st.session_state.get('last_results'):
         st.dataframe(pd.DataFrame(st.session_state['last_results']), use_container_width=True, hide_index=True)
     else:
-        st.info("System Ready. Manage targets in the sidebar and Execute Sweep.")
+        st.info("System Ready. Add/Select keywords on the left and Execute Sweep.")
 
 with t_dash:
     conn = get_db_connection()
@@ -163,39 +174,53 @@ with t_dash:
     conn.close()
     if not df_all.empty:
         st.subheader("🎯 Intelligence Overview")
+        # Pivoting ensures unified columns
         heatmap = df_all.groupby(['target', 'source']).size().unstack(fill_value=0)
         st.table(heatmap)
 
 with t_arch:
     st.header("Intelligence Archive")
-    arch_space, arch_ctrl = st.columns([4, 1])
-    with arch_ctrl:
-        depth = st.selectbox("View Depth:", [50, 100, 500, "All"], index=0)
-    
-    limit = "" if depth == "All" else f"LIMIT {depth}"
     conn = get_db_connection()
-    arch_df = pd.read_sql_query(f"SELECT found_date, source, target, title, price, url FROM items ORDER BY found_date DESC {limit}", conn)
+    arch_df = pd.read_sql_query(f"SELECT found_date, source, target, title, price, url FROM items ORDER BY found_date DESC LIMIT 100", conn)
     conn.close()
-    st.dataframe(arch_df, column_config={"url": st.column_config.LinkColumn("Link")}, use_container_width=True, hide_index=True, height=700)
+    st.dataframe(arch_df, column_config={"url": st.column_config.LinkColumn("Link")}, use_container_width=True, hide_index=True)
 
 with t_conf:
     st.header("⚙️ System Configuration")
-    st.subheader("Engine Access")
+    
+    st.subheader("1. Active Search Engines")
     c1, c2, c3 = st.columns(3)
     c1.toggle("eBay", value=True, key="p_ebay")
     c2.toggle("Etsy", value=True, key="p_etsy")
     c3.toggle("Google Shopping", value=True, key="p_google")
     
     st.divider()
-    st.write("### Target Statistics")
+    
+    st.subheader("2. Target Scheduling & Automation")
+    st.info("Set frequency for background tasks here. Manual targets appear only in the sidebar.")
+    
     conn = get_db_connection()
-    stats_df = pd.read_sql_query("SELECT name, frequency, last_run FROM targets", conn)
+    sched_df = pd.read_sql_query("SELECT * FROM targets", conn)
     conn.close()
-    st.dataframe(stats_df, use_container_width=True, hide_index=True)
+    
+    for idx, row in sched_df.iterrows():
+        sc1, sc2, sc3 = st.columns([3, 2, 1])
+        sc1.write(f"**{row['name']}**")
+        new_freq = sc2.selectbox("Freq:", ["Manual", "Daily", "Weekly"], index=["Manual", "Daily", "Weekly"].index(row['frequency']), key=f"f_{row['name']}")
+        if new_freq != row['frequency']:
+            conn = get_db_connection()
+            conn.execute("UPDATE targets SET frequency = ? WHERE name = ?", (new_freq, row['name']))
+            conn.commit(); conn.close()
+            st.rerun()
+        sc3.write(f"Last: {row['last_run'] if row['last_run'] else 'Never'}")
 
 with t_logs:
-    if st.button("Purge Logs"):
-        for h in logging.root.handlers[:]: h.close(); logging.root.removeHandler(h)
-        if os.path.exists(LOG_FILE): os.remove(LOG_FILE); setup_logger(); st.rerun()
+    st.header("System Logs")
+    if st.button("Clear Log History"):
+        if os.path.exists(LOG_FILE): 
+            with open(LOG_FILE, 'w') as f: f.write("")
+            st.rerun()
     if os.path.exists(LOG_FILE):
-        with open(LOG_FILE, "r") as f: st.code("".join(f.readlines()[-50:]))
+        with open(LOG_FILE, "r") as f:
+            log_data = f.readlines()
+            st.code("".join(log_data[-50:]))
