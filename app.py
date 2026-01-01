@@ -6,7 +6,7 @@ import os
 import logging
 from datetime import datetime
 
-# --- 1. SYSTEM SETUP ---
+# --- 1. CORE SYSTEM SETUP ---
 st.set_page_config(page_title="SCOUT | Intelligence Terminal", layout="wide")
 
 if "SERPAPI_KEY" in st.secrets:
@@ -27,13 +27,11 @@ def init_db():
     conn.execute('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, target TEXT, source TEXT, title TEXT, price TEXT, url TEXT UNIQUE)')
     conn.execute('CREATE TABLE IF NOT EXISTS targets (name TEXT PRIMARY KEY, frequency TEXT DEFAULT "Manual", last_run TIMESTAMP)')
     conn.execute('CREATE TABLE IF NOT EXISTS custom_sites (domain TEXT PRIMARY KEY)')
-    # Data Normalization
-    conn.execute("UPDATE items SET source = 'Ebay' WHERE LOWER(source) = 'ebay'")
     conn.commit(); conn.close()
 
 init_db()
 
-# --- 3. THE ENGINE ---
+# --- 3. THE UNIVERSAL ENGINE ---
 def run_scout_mission(query, engine_type, custom_domain=None):
     url = "https://serpapi.com/search.json"
     q = str(query).strip()
@@ -43,10 +41,11 @@ def run_scout_mission(query, engine_type, custom_domain=None):
         params.update({"engine": "ebay", "_nkw": q})
         res_key, label = "ebay_results", "Ebay"
     elif engine_type == "custom":
-        # The 'Peel Back' Trick: Search the specific site directly via Google
+        # SITE: PEEL BACK Logic
         params.update({"engine": "google", "q": f"site:{custom_domain} {q}"})
         res_key, label = "organic_results", custom_domain.split('.')[0].title()
-    else: # Google Shopping / Etsy
+    else: 
+        # Etsy or Google Shopping
         search_q = f"site:etsy.com {q}" if engine_type == "etsy" else q
         params.update({"engine": "google_shopping", "q": search_q})
         res_key, label = "shopping_results", engine_type.title()
@@ -71,38 +70,44 @@ def run_scout_mission(query, engine_type, custom_domain=None):
         logging.error(f"Error on {label}: {str(e)}")
         return []
 
-# --- 4. SIDEBAR ---
+# --- 4. SIDEBAR LIBRARY ---
 with st.sidebar:
     st.title("🛡️ SCOUT")
+    
+    # FIX: Using 'key' to ensure state persistence
     with st.expander("➕ Register Target", expanded=False):
-        new_k = st.text_input("Keyword:")
-        if st.button("Add to Library") and new_k:
-            conn = get_db_connection()
-            conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_k,))
-            conn.commit(); conn.close(); st.rerun()
+        new_k = st.text_input("Keyword:", key="sidebar_new_target")
+        if st.button("Add to Library", use_container_width=True):
+            if new_k:
+                conn = get_db_connection()
+                conn.execute("INSERT OR IGNORE INTO targets (name) VALUES (?)", (new_k,))
+                conn.commit(); conn.close()
+                st.toast(f"Added {new_k}!")
+                st.rerun()
 
     st.divider()
     conn = get_db_connection()
-    targets = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
+    targets_list = pd.read_sql_query("SELECT name FROM targets", conn)['name'].tolist()
     conn.close()
     
     selected_targets = []
-    for t in targets:
+    for t in targets_list:
         c1, c2 = st.columns([4, 1])
         if c1.checkbox(t, value=True, key=f"cb_{t}"): selected_targets.append(t)
         if c2.button("🗑️", key=f"del_{t}"):
             conn = get_db_connection()
             conn.execute("DELETE FROM targets WHERE name = ?", (t,))
-            conn.commit(); conn.close(); st.rerun()
+            conn.commit(); conn.close()
+            st.rerun()
     
     st.divider()
-    execute = st.button("🚀 EXECUTE SWEEP", type="primary", use_container_width=True)
+    execute_sweep = st.button("🚀 EXECUTE SWEEP", type="primary", use_container_width=True)
 
 # --- 5. TABS ---
 t_live, t_dash, t_arch, t_conf, t_logs = st.tabs(["📡 Live Results", "📊 Dashboard", "📜 Archive", "⚙️ Config", "🛠️ Logs"])
 
 with t_live:
-    if execute and selected_targets:
+    if execute_sweep and selected_targets:
         hits = []
         with st.status("Gathering Intel...") as status:
             conn = get_db_connection()
@@ -113,7 +118,6 @@ with t_live:
                 if st.session_state.get('p_ebay', True): hits.extend(run_scout_mission(target, "ebay"))
                 if st.session_state.get('p_etsy', True): hits.extend(run_scout_mission(target, "etsy"))
                 if st.session_state.get('p_google', True): hits.extend(run_scout_mission(target, "google"))
-                # Run Custom Sites
                 for site in customs:
                     hits.extend(run_scout_mission(target, "custom", site))
             
@@ -144,15 +148,18 @@ with t_arch:
     st.dataframe(df_arch, column_config={"url": st.column_config.LinkColumn("Link")}, use_container_width=True, hide_index=True)
 
 with t_conf:
-    st.subheader("1. Engines")
-    c1, c2, c3 = st.columns(3); c1.toggle("Ebay", value=True, key="p_ebay"); c2.toggle("Etsy", value=True, key="p_etsy"); c3.toggle("Google", value=True, key="p_google")
+    st.subheader("1. Active Marketplace Toggles")
+    c1, c2, c3 = st.columns(3)
+    c1.toggle("Ebay", value=True, key="p_ebay")
+    c2.toggle("Etsy", value=True, key="p_etsy")
+    c3.toggle("Google Shopping", value=True, key="p_google")
     
     st.divider()
-    st.subheader("2. Scheduling")
+    st.subheader("2. Target Scheduling")
     conn = get_db_connection()
     s_df = pd.read_sql_query("SELECT * FROM targets", conn)
     conn.close()
-    # Expanded Scheduling options
+    
     sched_opts = ["Manual", "Daily", "M-W-F", "Weekly", "Bi-Weekly"]
     for _, r in s_df.iterrows():
         sc1, sc2 = st.columns([3, 2])
@@ -165,13 +172,22 @@ with t_conf:
             conn.commit(); conn.close(); st.rerun()
 
     st.divider()
-    st.subheader("3. Custom Search Sites")
-    new_site = st.text_input("Add Domain (e.g. gumtree.com):")
-    if st.button("Register Site") and new_site:
-        conn = get_db_connection(); conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (new_site,))
-        conn.commit(); conn.close(); st.rerun()
+    st.subheader("3. Custom Domain Registration")
+    # FIX: Added key to prevent "Blinking without adding"
+    new_site = st.text_input("Domain (e.g. vintage-computer.com):", key="conf_new_site")
+    if st.button("Register Custom Site"):
+        if new_site:
+            conn = get_db_connection()
+            conn.execute("INSERT OR IGNORE INTO custom_sites (domain) VALUES (?)", (new_site,))
+            conn.commit(); conn.close()
+            st.toast(f"Registered {new_site}!")
+            st.rerun()
 
 with t_logs:
-    if st.button("Clear Logs"): open(LOG_FILE, 'w').close(); st.rerun()
+    st.subheader("System Logs")
+    if st.button("Clear History"):
+        open(LOG_FILE, 'w').close()
+        st.rerun()
     if os.path.exists(LOG_FILE):
-        with open(LOG_FILE, "r") as f: st.code("".join(f.readlines()[-50:]))
+        with open(LOG_FILE, "r") as f:
+            st.code("".join(f.readlines()[-50:]))
